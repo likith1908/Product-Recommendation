@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.vscode/
+junk.txt
+scripts/
+csv_files/
+csv/
+*/__pycache__
+*.pyc
+.DS_Store
+__pycache__/
+smaple_data.db

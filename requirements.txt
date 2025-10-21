@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+pandas
+fastapi[standard]
+python-jose[cryptography]
+python-dotenv
+PyJWT
+pwdlib[argon2]
