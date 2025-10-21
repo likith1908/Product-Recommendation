@@ -1,14 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import auth
+from app.api.v1 import auth, chat
 from app.core.config import settings
 from app.core.database import init_db
 
+import os
+import uvicorn
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.VERSION,
-    description="Simple Authentication API"
+    description="Simple Authentication API with AI Chat"
 )
 
 # CORS
@@ -27,15 +29,16 @@ def startup_event():
     init_db()
 
 
-# Include auth router
+# Include routers
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
+app.include_router(chat.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/")
 async def root():
     """Root endpoint."""
     return {
-        "message": "Authentication API",
+        "message": "Authentication API with AI Chat",
         "docs": "/docs",
         "version": settings.VERSION
     }
@@ -45,3 +48,12 @@ async def root():
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy"}
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+        reload=True
+    )

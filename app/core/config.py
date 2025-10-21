@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: list = ["*"]
     
+    #OPENAI
+    OPENAI_API_KEY: str
     class Config:
         env_file = ".env"
         case_sensitive = True
