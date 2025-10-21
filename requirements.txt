@@ -7,3 +7,4 @@ python-jose[cryptography]
 python-dotenv
 PyJWT
 pwdlib[argon2]
+fastapi[standard]
