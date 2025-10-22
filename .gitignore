@@ -13,3 +13,4 @@ __pycache__/
 smaple_data.db
 .venv/
 
+service-account.json
