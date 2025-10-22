@@ -18,6 +18,9 @@ from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain.tools import tool
 
+#embeddings
+
+
 
 SECRET_KEY = os.environ.get("JWT_SECRET", "changeme")
 ALGORITHM = "HS256"

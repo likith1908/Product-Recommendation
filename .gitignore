@@ -3,7 +3,7 @@ dist/
 .env
 .vscode/
 junk.txt
-scripts/
+script/
 csv_files/
 csv/
 */__pycache__
@@ -12,3 +12,4 @@ csv/
 __pycache__/
 smaple_data.db
 .venv/
+

@@ -8,3 +8,14 @@ python-dotenv
 PyJWT
 pwdlib[argon2]
 fastapi[standard]
+Pillow
+langchain
+langchain-openai
+sentence-transformers
+open-clip-torch
+torch
+torchvision
+requests
+numpy
+google-cloud-storage
+python-multipart
