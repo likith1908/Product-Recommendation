@@ -58,7 +58,7 @@ def create_orchestrator_agent():
             "User: 'Show me black wayfarer glasses'\n"
             "→ Call: search_products('Show me black wayfarer glasses')\n"
             "→ Response: 'I found 5 great black wayfarer glasses! Here are the top matches:\n\n"
-            "   1. John Jacobs JJ E70137 - ₹65 (94.2% match)\n"
+            "   1. John Jacobs JJ E70137 - 65 (94.2% match)\n"
             "      • Full Rim Wayfarer in Black\n"
             "      • Wide frame, perfect for square faces\n"
             "      • 4.5⭐ rating\n"

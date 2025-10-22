@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     TEXT_EMBEDDING_DIM: int = 384  # all-MiniLM-L6-v2 dimension
     IMAGE_EMBEDDING_DIM: int = 512  # CLIP ViT-B-32 dimension
     
+    # Google Cloud Storage
+    GCS_PROJECT_NAME: str = "prj-auropro-dev"
+    GCS_BUCKET_NAME: str = "product-recommendation-chatbot"
+    GCS_UPLOAD_FOLDER: str = "user_uploads"
+    GOOGLE_APPLICATION_CREDENTIALS: str = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+    
+    # File Upload Settings
+    MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
+    ALLOWED_IMAGE_EXTENSIONS: set = {".jpg", ".jpeg", ".png", ".webp"}
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
