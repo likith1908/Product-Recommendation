@@ -1,5 +1,5 @@
 """
-Product embedding service using Sentence Transformers and CLIP.
+Product embedding service using Sentence Transformers, CLIP, and ChromaDB.
 Handles text and image embeddings for product recommendations.
 """
 
@@ -13,6 +13,8 @@ from PIL import Image
 import torch
 from sentence_transformers import SentenceTransformer
 import open_clip
+import chromadb
+from chromadb.config import Settings as ChromaSettings
 
 from app.core.config import settings
 from app.core.database import get_db_connection
@@ -23,6 +25,7 @@ class ProductEmbeddingService:
     Service for creating and searching product embeddings using:
     - Sentence Transformers for text embeddings (384D)
     - CLIP for image embeddings (512D)
+    - ChromaDB for vector storage and similarity search
     """
     
     _instance = None
@@ -35,9 +38,9 @@ class ProductEmbeddingService:
         return cls._instance
     
     def __init__(self):
-        """Initialize embedding models (only once)"""
+        """Initialize embedding models and ChromaDB (only once)"""
         if not self._initialized:
-            print("🔧 Initializing embedding models...")
+            print("🔧 Initializing embedding models and ChromaDB...")
             
             # Load Sentence Transformer for text
             print(f"📝 Loading {settings.SENTENCE_TRANSFORMER_MODEL}...")
@@ -58,8 +61,31 @@ class ProductEmbeddingService:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
             self.clip_model = self.clip_model.to(self.device)
             
+            # Initialize ChromaDB
+            print(f"🗄️  Initializing ChromaDB at {settings.CHROMA_PERSIST_DIR}...")
+            self.chroma_client = chromadb.PersistentClient(
+                path=settings.CHROMA_PERSIST_DIR,
+                settings=ChromaSettings(
+                    anonymized_telemetry=False,
+                    allow_reset=True
+                )
+            )
+            
+            # Get or create collections
+            self.text_collection = self.chroma_client.get_or_create_collection(
+                name=settings.CHROMA_TEXT_COLLECTION,
+                metadata={"description": "Product text embeddings using Sentence Transformers"}
+            )
+            
+            self.image_collection = self.chroma_client.get_or_create_collection(
+                name=settings.CHROMA_IMAGE_COLLECTION,
+                metadata={"description": "Product image embeddings using CLIP"}
+            )
+            
             self._initialized = True
-            print(f"✅ Models loaded successfully (device: {self.device})")
+            print(f"✅ Models and ChromaDB loaded successfully (device: {self.device})")
+            print(f"   Text collection: {self.text_collection.count()} embeddings")
+            print(f"   Image collection: {self.image_collection.count()} embeddings")
     
     def _get_product_text(self, product: Dict) -> str:
         """
@@ -122,6 +148,44 @@ class ProductEmbeddingService:
         
         return ". ".join(text_parts)
     
+    def _product_to_metadata(self, product: Dict) -> Dict:
+        """Convert product dict to ChromaDB metadata (strings, ints, floats only)"""
+        metadata = {}
+        
+        # Include key fields that might be used for filtering
+        safe_fields = [
+            'Product Name', 'Brand Name', 'Frame Type', 'Frame Shape',
+            'Frame Colour', 'Frame Material', 'Frame Size', 'Product Type',
+            'Face Shape', 'Activity', 'Image URL', 'description'
+        ]
+        
+        for field in safe_fields:
+            value = product.get(field)
+            if value is not None:
+                # Convert to string to ensure compatibility
+                metadata[field] = str(value)
+        
+        # Handle numeric fields
+        if product.get('Price'):
+            try:
+                metadata['Price'] = float(product['Price'])
+            except (ValueError, TypeError):
+                pass
+        
+        if product.get('Rating'):
+            try:
+                metadata['Rating'] = float(product['Rating'])
+            except (ValueError, TypeError):
+                pass
+        
+        if product.get('Number of Reviews'):
+            try:
+                metadata['Number of Reviews'] = int(product['Number of Reviews'])
+            except (ValueError, TypeError):
+                pass
+        
+        return metadata
+    
     def create_text_embedding(self, text: str) -> np.ndarray:
         """Create Sentence Transformer embedding for text (384D)"""
         embedding = self.text_model.encode(text, convert_to_numpy=True)
@@ -168,13 +232,26 @@ class ProductEmbeddingService:
     
     def embed_all_products(self, force_refresh: bool = False, batch_size: int = 32):
         """
-        Embed all products in the database.
+        Embed all products in the database and store in ChromaDB.
         Creates both text and image embeddings.
         
         Args:
-            force_refresh: If True, re-embed all products
+            force_refresh: If True, clear and re-embed all products
             batch_size: Number of products to process in each batch
         """
+        if force_refresh:
+            print("🗑️  Clearing existing embeddings...")
+            self.chroma_client.delete_collection(settings.CHROMA_TEXT_COLLECTION)
+            self.chroma_client.delete_collection(settings.CHROMA_IMAGE_COLLECTION)
+            self.text_collection = self.chroma_client.create_collection(
+                name=settings.CHROMA_TEXT_COLLECTION,
+                metadata={"description": "Product text embeddings using Sentence Transformers"}
+            )
+            self.image_collection = self.chroma_client.create_collection(
+                name=settings.CHROMA_IMAGE_COLLECTION,
+                metadata={"description": "Product image embeddings using CLIP"}
+            )
+        
         with get_db_connection() as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
@@ -185,7 +262,23 @@ class ProductEmbeddingService:
             
             print(f"\n📦 Found {len(products)} products to embed")
             
-            # Collect texts for batch processing
+            # Get existing product IDs to skip
+            existing_text_ids = set()
+            existing_image_ids = set()
+            
+            if not force_refresh:
+                try:
+                    existing_text = self.text_collection.get(include=[])
+                    existing_text_ids = set(existing_text['ids'])
+                    
+                    existing_image = self.image_collection.get(include=[])
+                    existing_image_ids = set(existing_image['ids'])
+                    
+                    print(f"📊 Already embedded: {len(existing_text_ids)} text, {len(existing_image_ids)} image")
+                except:
+                    pass
+            
+            # Collect products to embed
             products_to_embed = []
             
             for idx, product in enumerate(products):
@@ -196,14 +289,9 @@ class ProductEmbeddingService:
                     print(f"⚠️  Skipping product at index {idx} (no Product ID)")
                     continue
                 
-                # Check if embeddings already exist
-                if not force_refresh:
-                    cur.execute(
-                        "SELECT 1 FROM product_text_embeddings WHERE product_id = ?",
-                        (product_id,)
-                    )
-                    if cur.fetchone():
-                        continue
+                # Check if already embedded
+                if not force_refresh and product_id in existing_text_ids:
+                    continue
                 
                 products_to_embed.append((idx, product_dict))
             
@@ -213,60 +301,62 @@ class ProductEmbeddingService:
             
             print(f"🔄 Embedding {len(products_to_embed)} products...")
             
-            # Process in batches for text embeddings
+            # Process in batches
             for i in range(0, len(products_to_embed), batch_size):
                 batch = products_to_embed[i:i+batch_size]
                 
-                # Prepare texts
-                texts = [self._get_product_text(prod[1]) for prod in batch]
+                # Prepare data for batch
+                batch_ids = []
+                batch_texts = []
+                batch_text_embeddings = []
+                batch_metadata = []
                 
-                # Batch encode texts
-                text_embeddings = self.text_model.encode(
-                    texts,
-                    convert_to_numpy=True,
-                    show_progress_bar=False
-                )
+                batch_image_ids = []
+                batch_image_embeddings = []
+                batch_image_metadata = []
                 
-                # Save text embeddings and process images
-                for j, (idx, product_dict) in enumerate(batch):
+                for idx, product_dict in batch:
                     product_id = product_dict['Product ID']
                     
-                    # Save text embedding
-                    cur.execute("""
-                        INSERT OR REPLACE INTO product_text_embeddings 
-                        (product_id, embedding, embedding_model)
-                        VALUES (?, ?, ?)
-                    """, (
-                        product_id,
-                        text_embeddings[j].astype(np.float32).tobytes(),
-                        settings.SENTENCE_TRANSFORMER_MODEL
-                    ))
+                    # Text embedding
+                    text = self._get_product_text(product_dict)
+                    text_embedding = self.create_text_embedding(text)
                     
-                    # Process image embedding (individual, not batched due to downloads)
+                    batch_ids.append(product_id)
+                    batch_texts.append(text)
+                    batch_text_embeddings.append(text_embedding.tolist())
+                    batch_metadata.append(self._product_to_metadata(product_dict))
+                    
+                    # Image embedding
                     image_url = product_dict.get('Image URL')
                     if image_url:
                         image_embedding = self.create_image_embedding(image_url)
                         if image_embedding is not None:
-                            cur.execute("""
-                                INSERT OR REPLACE INTO product_image_embeddings 
-                                (product_id, embedding, embedding_model)
-                                VALUES (?, ?, ?)
-                            """, (
-                                product_id,
-                                image_embedding.tobytes(),
-                                f"{settings.CLIP_MODEL_NAME}-{settings.CLIP_PRETRAINED}"
-                            ))
+                            batch_image_ids.append(product_id)
+                            batch_image_embeddings.append(image_embedding.tolist())
+                            batch_image_metadata.append(self._product_to_metadata(product_dict))
                     
                     print(f"  [{idx+1}/{len(products)}] ✓ {product_id}")
                 
-                conn.commit()
+                # Add batch to ChromaDB
+                if batch_ids:
+                    self.text_collection.add(
+                        ids=batch_ids,
+                        embeddings=batch_text_embeddings,
+                        documents=batch_texts,
+                        metadatas=batch_metadata
+                    )
+                
+                if batch_image_ids:
+                    self.image_collection.add(
+                        ids=batch_image_ids,
+                        embeddings=batch_image_embeddings,
+                        metadatas=batch_image_metadata
+                    )
             
             print("✅ Embedding complete!")
-    
-    @staticmethod
-    def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-        """Calculate cosine similarity between two vectors"""
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+            print(f"   Text embeddings: {self.text_collection.count()}")
+            print(f"   Image embeddings: {self.image_collection.count()}")
     
     def search_by_text(
         self,
@@ -285,50 +375,42 @@ class ProductEmbeddingService:
         # Create query embedding
         query_embedding = self.create_text_embedding(query)
         
-        with get_db_connection() as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
+        # Build where clause for filters
+        where = None
+        if filters:
+            where = {"$and": []}
+            for key, value in filters.items():
+                where["$and"].append({key: {"$eq": value}})
+        
+        # Query ChromaDB
+        results = self.text_collection.query(
+            query_embeddings=[query_embedding.tolist()],
+            n_results=top_k,
+            where=where,
+            include=["metadatas", "distances", "documents"]
+        )
+        
+        if not results['ids'] or not results['ids'][0]:
+            return []
+        
+        # Format results
+        formatted_results = []
+        for i, product_id in enumerate(results['ids'][0]):
+            metadata = results['metadatas'][0][i]
+            distance = results['distances'][0][i]
             
-            # Build SQL query with optional filters
-            sql = """
-                SELECT p.*, te.embedding
-                FROM updated_essilor_products p
-                JOIN product_text_embeddings te ON p."Product ID" = te.product_id
-            """
+            # Convert distance to similarity (ChromaDB uses L2 distance by default)
+            # For normalized vectors: similarity = 1 - (distance^2 / 2)
+            similarity = 1 - (distance ** 2 / 2)
             
-            params = []
-            if filters:
-                conditions = []
-                for key, value in filters.items():
-                    conditions.append(f'p."{key}" = ?')
-                    params.append(value)
-                sql += " WHERE " + " AND ".join(conditions)
-            
-            cur.execute(sql, params)
-            products = cur.fetchall()
-            
-            if not products:
-                return []
-            
-            # Calculate similarities
-            results = []
-            for product in products:
-                product_dict = dict(product)
-                product_embedding = np.frombuffer(
-                    product_dict['embedding'],
-                    dtype=np.float32
-                )
-                
-                similarity = self.cosine_similarity(query_embedding, product_embedding)
-                product_dict['similarity_score'] = similarity
-                
-                # Remove embedding from result
-                del product_dict['embedding']
-                results.append(product_dict)
-            
-            # Sort by similarity and return top_k
-            results.sort(key=lambda x: x['similarity_score'], reverse=True)
-            return results[:top_k]
+            result = {
+                'Product ID': product_id,
+                'similarity_score': max(0, min(1, similarity))  # Clamp to [0, 1]
+            }
+            result.update(metadata)
+            formatted_results.append(result)
+        
+        return formatted_results
     
     def search_by_image_and_text(
         self,
@@ -376,40 +458,47 @@ class ProductEmbeddingService:
         if query_embedding is None:
             return []
         
-        with get_db_connection() as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
+        # Query ChromaDB image collection
+        results = self.image_collection.query(
+            query_embeddings=[query_embedding.tolist()],
+            n_results=top_k,
+            include=["metadatas", "distances"]
+        )
+        
+        if not results['ids'] or not results['ids'][0]:
+            return []
+        
+        # Format results
+        formatted_results = []
+        for i, product_id in enumerate(results['ids'][0]):
+            metadata = results['metadatas'][0][i]
+            distance = results['distances'][0][i]
             
-            # Get all products with image embeddings
-            cur.execute("""
-                SELECT p.*, ie.embedding
-                FROM updated_essilor_products p
-                JOIN product_image_embeddings ie ON p."Product ID" = ie.product_id
-            """)
-            products = cur.fetchall()
+            # Convert distance to similarity
+            similarity = 1 - (distance ** 2 / 2)
             
-            if not products:
-                return []
-            
-            # Calculate similarities
-            results = []
-            for product in products:
-                product_dict = dict(product)
-                product_embedding = np.frombuffer(
-                    product_dict['embedding'],
-                    dtype=np.float32
-                )
-                
-                similarity = self.cosine_similarity(query_embedding, product_embedding)
-                product_dict['similarity_score'] = similarity
-                
-                # Remove embedding from result
-                del product_dict['embedding']
-                results.append(product_dict)
-            
-            # Sort by similarity and return top_k
-            results.sort(key=lambda x: x['similarity_score'], reverse=True)
-            return results[:top_k]
+            result = {
+                'Product ID': product_id,
+                'similarity_score': max(0, min(1, similarity))
+            }
+            result.update(metadata)
+            formatted_results.append(result)
+        
+        return formatted_results
+    
+    def get_collection_stats(self) -> Dict:
+        """Get statistics about the ChromaDB collections"""
+        return {
+            "text_collection": {
+                "name": settings.CHROMA_TEXT_COLLECTION,
+                "count": self.text_collection.count()
+            },
+            "image_collection": {
+                "name": settings.CHROMA_IMAGE_COLLECTION,
+                "count": self.image_collection.count()
+            },
+            "persist_directory": settings.CHROMA_PERSIST_DIR
+        }
 
 
 # Singleton instance

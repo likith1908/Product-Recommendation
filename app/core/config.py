@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 from pydantic_settings import BaseSettings
 
 
@@ -17,14 +20,19 @@ class Settings(BaseSettings):
     except (ValueError, TypeError):
         ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    # Database
+    # Database (SQLite for user data only)
     DATABASE_PATH: str = os.environ.get("DATABASE_PATH")
+    
+    # ChromaDB Settings
+    CHROMA_PERSIST_DIR: str = os.environ.get("CHROMA_PERSIST_DIR", "./chroma_db")
+    CHROMA_TEXT_COLLECTION: str = "product_text_embeddings"
+    CHROMA_IMAGE_COLLECTION: str = "product_image_embeddings"
     
     # CORS
     ALLOWED_ORIGINS: list = ["*"]
     
     # OpenAI
-    OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY")
+    OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
     
     # Embedding Models
     SENTENCE_TRANSFORMER_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"

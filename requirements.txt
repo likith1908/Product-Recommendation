@@ -19,3 +19,7 @@ requests
 numpy
 google-cloud-storage
 python-multipart
+chromadb
+transformers
+tokenizers
+pip install pydantic-settings

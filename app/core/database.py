@@ -16,43 +16,25 @@ def get_db_connection():
 
 
 def init_db():
-    """Initialize database tables."""
+    """
+    Initialize database tables.
+    
+    Note: With ChromaDB migration, we only keep SQLite for:
+    - Product catalog (updated_essilor_products table)
+    - User authentication data
+    
+    Vector embeddings are now stored in ChromaDB.
+    """
     with get_db_connection() as conn:
         cur = conn.cursor()
         
-        # Text embeddings table (Sentence Transformer - 384 dimensions)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS product_text_embeddings (
-                product_id TEXT PRIMARY KEY,
-                embedding BLOB NOT NULL,
-                embedding_model TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (product_id) REFERENCES updated_essilor_products("Product ID")
-            )
-        """)
+        # Keep the products table (source of truth for product data)
+        # Embeddings are now in ChromaDB, not SQLite
         
-        # Image embeddings table (CLIP - 512 dimensions)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS product_image_embeddings (
-                product_id TEXT PRIMARY KEY,
-                embedding BLOB NOT NULL,
-                embedding_model TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (product_id) REFERENCES updated_essilor_products("Product ID")
-            )
-        """)
-        
-        # Create indexes for faster queries
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_text_embeddings_product 
-            ON product_text_embeddings(product_id)
-        """)
-        
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_image_embeddings_product 
-            ON product_image_embeddings(product_id)
-        """)
+        # Optional: You can drop the old embedding tables if you want
+        # Uncomment these lines after successful migration:
+        # cur.execute("DROP TABLE IF EXISTS product_text_embeddings")
+        # cur.execute("DROP TABLE IF EXISTS product_image_embeddings")
         
         conn.commit()
-        
-        
+        print("✅ Database initialized (embeddings now in ChromaDB)")

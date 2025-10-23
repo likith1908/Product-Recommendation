@@ -14,3 +14,6 @@ smaple_data.db
 .venv/
 
 service-account.json
+.python-version
+chroma_db
+constraints.txt
