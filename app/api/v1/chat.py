@@ -67,7 +67,10 @@ def extract_products_from_tool_response(tool_response: str) -> Optional[List[Dic
 @router.post("", response_model=ChatResponse)
 async def chat(
     message: str = Form(...),
-    image: Optional[UploadFile] = File(None),
+    # Note: Swagger's "Send empty value" for file inputs submits an empty string (not a file),
+    # which would normally fail validation. We accept str | None too and coerce it to None so
+    # the endpoint is resilient when that checkbox is used.
+    image: UploadFile | str | None = File(None),
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
     """
@@ -75,7 +78,8 @@ async def chat(
     
     Parameters:
     - message: User's text query (required)
-    - image: Optional image file for visual search
+        - image: Optional image file for visual search
+            Tip: in Swagger UI, leave "Send empty value" unchecked if you don't attach a file.
     
     Response includes:
     - response: Human-readable message
@@ -89,7 +93,11 @@ async def chat(
     uploaded_image_url = None
     
     # Handle image upload if provided
-    if image:
+    # Accept and ignore empty-string submissions from Swagger ("Send empty value").
+    if isinstance(image, str) and image == "":
+        image = None
+
+    if image and isinstance(image, UploadFile):
         try:
             gcs_service = get_gcs_service()
             uploaded_image_url = gcs_service.upload_user_image(
@@ -102,6 +110,9 @@ async def chat(
                 status_code=500,
                 detail=f"Image upload failed: {str(e)}"
             )
+    elif image and not isinstance(image, UploadFile):
+        # Any non-file content is treated as no image
+        image = None
     
     # Build enhanced message with image context
     user_message = message
