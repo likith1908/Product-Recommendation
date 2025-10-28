@@ -1,10 +1,15 @@
 from typing import Annotated, Optional, List, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from pydantic import BaseModel
 
 from app.api.deps import get_current_active_user
 from app.models.user import User
+from app.models.conversation import (
+    Conversation, ConversationCreate, ConversationWithMessages,
+    ConversationSummary
+)
+from app.crud import conversation as conversation_crud
 from app.agents.orchestrator import create_orchestrator_agent
 from app.services.embedding_service import get_embedding_service
 from app.services.gcs_service import get_gcs_service
@@ -32,25 +37,25 @@ class ProductResult(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    response: str  # Human-readable message
-    products: Optional[List[ProductResult]] = None  # Structured product data
+    response: str
+    products: Optional[List[ProductResult]] = None
     tool_called: str
     status: str
     uploaded_image_url: Optional[str] = None
-    query: Optional[str] = None  # Original user query
+    query: Optional[str] = None
     results_count: Optional[int] = None
+    conversation_id: str  # Added
+    message_count: int  # Added
+
+
+class ChatRequest(BaseModel):
+    """Request model for chat with conversation history"""
+    message: str
+    conversation_id: Optional[str] = None  # If None, creates new conversation
 
 
 def extract_products_from_tool_response(tool_response: str) -> Optional[List[Dict[str, Any]]]:
-    """
-    Extract structured product data from tool JSON response.
-    
-    Args:
-        tool_response: JSON string from tool execution
-    
-    Returns:
-        List of product dictionaries or None
-    """
+    """Extract structured product data from tool JSON response."""
     try:
         import json
         data = json.loads(tool_response)
@@ -64,36 +69,144 @@ def extract_products_from_tool_response(tool_response: str) -> Optional[List[Dic
         return None
 
 
+# ========== CONVERSATION MANAGEMENT ENDPOINTS ==========
+
+@router.post("/conversations", response_model=Conversation)
+async def create_conversation(
+    title: Optional[str] = None,
+    current_user: Annotated[User, Depends(get_current_active_user)] = None
+):
+    """Create a new conversation session."""
+    conversation = ConversationCreate(
+        user_id=current_user.user_id,
+        title=title
+    )
+    return conversation_crud.create_conversation(conversation)
+
+
+@router.get("/conversations", response_model=List[ConversationSummary])
+async def list_conversations(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: Annotated[User, Depends(get_current_active_user)] = None
+):
+    """List all conversations for the current user."""
+    return conversation_crud.list_user_conversations(
+        user_id=current_user.user_id,
+        limit=limit,
+        offset=offset
+    )
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationWithMessages)
+async def get_conversation(
+    conversation_id: str,
+    limit: Optional[int] = Query(None, description="Limit number of messages returned"),
+    current_user: Annotated[User, Depends(get_current_active_user)] = None
+):
+    """Get a specific conversation with full message history."""
+    conversation = conversation_crud.get_conversation_with_messages(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id,
+        limit=limit
+    )
+    
+    if not conversation:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found"
+        )
+    
+    return conversation
+
+
+@router.patch("/conversations/{conversation_id}")
+async def update_conversation(
+    conversation_id: str,
+    title: str,
+    current_user: Annotated[User, Depends(get_current_active_user)] = None
+):
+    """Update conversation title."""
+    success = conversation_crud.update_conversation_title(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id,
+        title=title
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found"
+        )
+    
+    return {"status": "success", "message": "Title updated"}
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    current_user: Annotated[User, Depends(get_current_active_user)] = None
+):
+    """Delete a conversation and all its messages."""
+    success = conversation_crud.delete_conversation(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found"
+        )
+    
+    return {"status": "success", "message": "Conversation deleted"}
+
+
+# ========== CHAT ENDPOINT WITH HISTORY ==========
+
 @router.post("", response_model=ChatResponse)
 async def chat(
     message: str = Form(...),
-    # Note: Swagger's "Send empty value" for file inputs submits an empty string (not a file),
-    # which would normally fail validation. We accept str | None too and coerce it to None so
-    # the endpoint is resilient when that checkbox is used.
+    conversation_id: Optional[str] = Form(None),
     image: UploadFile | str | None = File(None),
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
     """
-    Enhanced chat endpoint with structured product responses.
+    Enhanced chat endpoint with conversation history support.
     
     Parameters:
     - message: User's text query (required)
-        - image: Optional image file for visual search
-            Tip: in Swagger UI, leave "Send empty value" unchecked if you don't attach a file.
+    - conversation_id: Optional conversation ID to continue existing conversation
+                      If None, creates a new conversation
+    - image: Optional image file for visual search
     
     Response includes:
     - response: Human-readable message
     - products: Array of product objects (if search was performed)
-    - tool_called: Which tool was used
-    - uploaded_image_url: URL of uploaded image (if any)
+    - conversation_id: ID of the conversation
+    - message_count: Total messages in this conversation
     """
     if not message or not message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
+    # Get or create conversation
+    if conversation_id:
+        conversation = conversation_crud.get_conversation(
+            conversation_id=conversation_id,
+            user_id=current_user.user_id
+        )
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    else:
+        # Create new conversation
+        conversation = conversation_crud.create_conversation(
+            ConversationCreate(user_id=current_user.user_id, title=None)
+        )
+        conversation_id = conversation.conversation_id
+    
     uploaded_image_url = None
     
     # Handle image upload if provided
-    # Accept and ignore empty-string submissions from Swagger ("Send empty value").
     if isinstance(image, str) and image == "":
         image = None
 
@@ -111,17 +224,40 @@ async def chat(
                 detail=f"Image upload failed: {str(e)}"
             )
     elif image and not isinstance(image, UploadFile):
-        # Any non-file content is treated as no image
         image = None
     
-    # Build enhanced message with image context
+    # Save user message
+    conversation_crud.add_message(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id,
+        role="user",
+        content=message,
+        uploaded_image_url=uploaded_image_url
+    )
+    
+    # Get conversation history for context
+    conversation_with_messages = conversation_crud.get_conversation_with_messages(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id,
+        limit=10  # Last 10 messages for context
+    )
+    
+    # Build messages for agent (include history)
+    agent_messages = []
+    for msg in conversation_with_messages.messages[:-1]:  # Exclude the just-added user message
+        agent_messages.append({
+            "role": msg.role,
+            "content": msg.content
+        })
+    
+    # Add current message with image context if provided
     user_message = message
     if uploaded_image_url:
         user_message += f"\n[User provided image URL: {uploaded_image_url}]"
     
-    messages = [{"role": "user", "content": user_message}]
+    agent_messages.append({"role": "user", "content": user_message})
     
-    # Collect agent response
+    # Call agent
     all_chunks = []
     tool_called = None
     final_content = None
@@ -130,7 +266,7 @@ async def chat(
     try:
         config = {"recursion_limit": 10}
         for chunk in orchestrator_agent.stream(
-            {"messages": messages}, 
+            {"messages": agent_messages}, 
             config=config,
             stream_mode="updates"
         ):
@@ -158,7 +294,7 @@ async def chat(
                             except (IndexError, AttributeError, KeyError):
                                 pass
                             
-                            # Capture tool response (before agent formats it)
+                            # Capture tool response
                             try:
                                 if hasattr(msg, "name") and msg.name in ["search_products", "visual_search_products"]:
                                     if hasattr(msg, "content"):
@@ -186,7 +322,6 @@ async def chat(
                 detail=f"Agent execution error: {str(e)}"
             )
     
-    # Verify a tool was called
     if not tool_called:
         raise HTTPException(
             status_code=500,
@@ -212,6 +347,17 @@ async def chat(
                 if final_content:
                     break
     
+    assistant_response = final_content or f"Tool {tool_called} was executed successfully"
+    
+    # Save assistant message
+    conversation_crud.add_message(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id,
+        role="assistant",
+        content=assistant_response,
+        tool_called=tool_called
+    )
+    
     # Extract structured product data
     products = None
     results_count = None
@@ -223,7 +369,6 @@ async def chat(
             products = [ProductResult(**p) for p in extracted]
             results_count = len(products)
             
-            # Try to extract query from tool response
             try:
                 import json
                 data = json.loads(tool_response_raw)
@@ -231,16 +376,26 @@ async def chat(
             except:
                 pass
     
+    # Get updated message count
+    updated_conversation = conversation_crud.get_conversation(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id
+    )
+    
     return ChatResponse(
-        response=final_content or f"Tool {tool_called} was executed successfully",
+        response=assistant_response,
         products=products,
         tool_called=tool_called,
         status="success",
         uploaded_image_url=uploaded_image_url,
         query=query or message,
-        results_count=results_count
+        results_count=results_count,
+        conversation_id=conversation_id,
+        message_count=updated_conversation.message_count
     )
 
+
+# ========== DIRECT SEARCH ENDPOINTS (NO HISTORY) ==========
 
 @router.get("/search/text")
 async def search_text(
@@ -248,10 +403,7 @@ async def search_text(
     top_k: int = 5,
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
-    """
-    Direct text search endpoint (bypasses agent).
-    Returns structured product data.
-    """
+    """Direct text search endpoint (bypasses agent and conversation history)."""
     try:
         embedding_service = get_embedding_service()
         results = embedding_service.search_by_text(query, top_k=top_k)
@@ -279,19 +431,14 @@ async def search_visual_upload(
     image: UploadFile = File(...),
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
-    """
-    Direct visual search endpoint with file upload.
-    Returns structured product data.
-    """
+    """Direct visual search endpoint with file upload (bypasses conversation history)."""
     try:
-        # Upload image to GCS
         gcs_service = get_gcs_service()
         image_url = gcs_service.upload_user_image(
             file=image,
             user_id=current_user.user_id
         )
         
-        # Perform visual search
         embedding_service = get_embedding_service()
         results = embedding_service.search_by_image_and_text(
             image_url=image_url,
@@ -320,9 +467,7 @@ async def search_visual_upload(
 async def list_my_uploads(
     current_user: Annotated[User, Depends(get_current_active_user)]
 ):
-    """
-    List all images uploaded by the current user.
-    """
+    """List all images uploaded by the current user."""
     try:
         gcs_service = get_gcs_service()
         uploads = gcs_service.list_user_files(current_user.user_id)
@@ -345,11 +490,8 @@ async def delete_upload(
     image_url: str,
     current_user: Annotated[User, Depends(get_current_active_user)]
 ):
-    """
-    Delete an uploaded image by its public URL.
-    """
+    """Delete an uploaded image by its public URL."""
     try:
-        # Verify the URL belongs to the user's folder
         if f"/{current_user.user_id}/" not in image_url:
             raise HTTPException(
                 status_code=403,

@@ -1,0 +1,5 @@
+prompts_registry:
+  orchestrator_prompt:
+    current_version: v1.0
+    previous_versions: []
+    owner: Likith Gannarapu
