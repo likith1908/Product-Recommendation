@@ -6,7 +6,7 @@ from langchain_openai import ChatOpenAI
 from app.agents.tools import get_order_details, search_products, visual_search_products
 
 def load_prompt_config(name: str):
-    prompt_path = Path(__file__).parent / "prompts" / f"{name}.yaml"
+    prompt_path = Path(__file__).parent.parent / "prompts" / f"{name}.yaml"
     with open(prompt_path) as f:
         return yaml.safe_load(f)
 

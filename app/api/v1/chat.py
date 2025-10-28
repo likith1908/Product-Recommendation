@@ -9,6 +9,7 @@ from app.models.conversation import (
     Conversation, ConversationCreate, ConversationWithMessages,
     ConversationSummary
 )
+from app.models.enhanced_models import ConversationWithProductMessages
 from app.crud import conversation as conversation_crud
 from app.agents.orchestrator import create_orchestrator_agent
 from app.services.embedding_service import get_embedding_service
@@ -48,12 +49,6 @@ class ChatResponse(BaseModel):
     message_count: int
 
 
-class ChatRequest(BaseModel):
-    """Request model for chat with conversation history"""
-    message: str
-    conversation_id: Optional[str] = None  # If None, creates new conversation
-
-
 def extract_products_from_tool_response(tool_response: str) -> Optional[List[Dict[str, Any]]]:
     """Extract structured product data from tool JSON response."""
     try:
@@ -69,7 +64,7 @@ def extract_products_from_tool_response(tool_response: str) -> Optional[List[Dic
         return None
 
 
-# ========== CONVERSATION MANAGEMENT ENDPOINTS ==========
+# ========== CONVERSATION/SESSION MANAGEMENT ==========
 
 @router.post("/conversations", response_model=Conversation)
 async def create_conversation(
@@ -173,6 +168,7 @@ async def delete_conversation(
     
     return {"status": "success", "message": "Conversation deleted"}
 
+
 @router.get("/conversations/stats/summary")
 async def get_conversation_stats(
     current_user: Annotated[User, Depends(get_current_active_user)] = None
@@ -186,8 +182,7 @@ async def get_conversation_stats(
     }
 
 
-
-# ========== CHAT ENDPOINT WITH HISTORY ==========
+# ========== CHAT ENDPOINT (WITHIN SESSIONS) ==========
 
 @router.post("", response_model=ChatResponse)
 async def chat(
@@ -377,19 +372,11 @@ async def chat(
     
     assistant_response = final_content or f"Tool {tool_called} was executed successfully"
     
-    # Save assistant message to session
-    conversation_crud.add_message(
-        conversation_id=conversation_id,
-        user_id=current_user.user_id,
-        role="assistant",
-        content=assistant_response,
-        tool_called=tool_called
-    )
-    
     # Extract structured product data
     products = None
     results_count = None
     query = None
+    products_json = None  # For storing in DB
     
     if tool_response_raw:
         extracted = extract_products_from_tool_response(tool_response_raw)
@@ -397,12 +384,25 @@ async def chat(
             products = [ProductResult(**p) for p in extracted]
             results_count = len(products)
             
+            # Store products as JSON string for database
+            import json
+            products_json = json.dumps(extracted)
+            
             try:
-                import json
                 data = json.loads(tool_response_raw)
                 query = data.get("query")
             except:
                 pass
+    
+    # Save assistant message to session (with products data)
+    conversation_crud.add_message(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id,
+        role="assistant",
+        content=assistant_response,
+        tool_called=tool_called,
+        products_data=products_json  # ← Store products here
+    )
     
     # Get updated message count
     updated_conversation = conversation_crud.get_conversation(
