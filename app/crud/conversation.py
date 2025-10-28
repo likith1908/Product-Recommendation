@@ -85,11 +85,11 @@ def get_conversation_with_messages(
     with get_db_connection() as conn:
         cur = conn.cursor()
         
-        # Get messages
+        # Get messages - NOW INCLUDING products_data
         query = """
             SELECT 
                 message_id, role, content, timestamp,
-                tool_called, uploaded_image_url
+                tool_called, uploaded_image_url, products_data
             FROM messages
             WHERE conversation_id = ?
             ORDER BY timestamp ASC
@@ -108,7 +108,8 @@ def get_conversation_with_messages(
                 content=row['content'],
                 timestamp=datetime.fromisoformat(row['timestamp']),
                 tool_called=row['tool_called'],
-                uploaded_image_url=row['uploaded_image_url']
+                uploaded_image_url=row['uploaded_image_url'],
+                products_data=row['products_data']  # ← Now retrieved from DB
             )
             for row in rows
         ]
@@ -183,8 +184,7 @@ def add_message(
     content: str,
     tool_called: Optional[str] = None,
     uploaded_image_url: Optional[str] = None,
-    products_data: Optional[str] = None  # ← This parameter must be here!
-
+    products_data: Optional[str] = None  # ← Parameter exists
 ) -> Message:
     """Add a message to a conversation"""
     message_id = str(uuid4())
@@ -193,14 +193,14 @@ def add_message(
     with get_db_connection() as conn:
         cur = conn.cursor()
         
-        # Insert message
+        # Insert message - NOW INCLUDING products_data in INSERT
         cur.execute("""
             INSERT INTO messages (
                 message_id, conversation_id, role, content,
-                timestamp, tool_called, uploaded_image_url
+                timestamp, tool_called, uploaded_image_url, products_data
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (message_id, conversation_id, role, content, now, tool_called, uploaded_image_url))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (message_id, conversation_id, role, content, now, tool_called, uploaded_image_url, products_data))
         
         # Update conversation timestamp
         cur.execute("""

@@ -48,6 +48,7 @@ def init_db():
                 timestamp TEXT NOT NULL,
                 tool_called TEXT,
                 uploaded_image_url TEXT,
+                products_data TEXT,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
             )
         """)
