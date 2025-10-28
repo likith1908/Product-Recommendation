@@ -44,8 +44,8 @@ class ChatResponse(BaseModel):
     uploaded_image_url: Optional[str] = None
     query: Optional[str] = None
     results_count: Optional[int] = None
-    conversation_id: str  # Added
-    message_count: int  # Added
+    conversation_id: str
+    message_count: int
 
 
 class ChatRequest(BaseModel):
@@ -76,7 +76,10 @@ async def create_conversation(
     title: Optional[str] = None,
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
-    """Create a new conversation session."""
+    """
+    Create a new conversation session.
+    Similar to creating a new document in Firestore.
+    """
     conversation = ConversationCreate(
         user_id=current_user.user_id,
         title=title
@@ -86,11 +89,16 @@ async def create_conversation(
 
 @router.get("/conversations", response_model=List[ConversationSummary])
 async def list_conversations(
-    limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100, description="Number of conversations to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
-    """List all conversations for the current user."""
+    """
+    List all conversation sessions for the current user.
+    Returns summaries with timestamps and message previews.
+    
+    Similar to listing all documents in a Firestore collection.
+    """
     return conversation_crud.list_user_conversations(
         user_id=current_user.user_id,
         limit=limit,
@@ -104,7 +112,11 @@ async def get_conversation(
     limit: Optional[int] = Query(None, description="Limit number of messages returned"),
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
-    """Get a specific conversation with full message history."""
+    """
+    Get a specific conversation session with full message history.
+    
+    Similar to fetching a Firestore document with its subcollection.
+    """
     conversation = conversation_crud.get_conversation_with_messages(
         conversation_id=conversation_id,
         user_id=current_user.user_id,
@@ -121,12 +133,12 @@ async def get_conversation(
 
 
 @router.patch("/conversations/{conversation_id}")
-async def update_conversation(
+async def update_conversation_title(
     conversation_id: str,
     title: str,
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
-    """Update conversation title."""
+    """Update the title of a conversation session."""
     success = conversation_crud.update_conversation_title(
         conversation_id=conversation_id,
         user_id=current_user.user_id,
@@ -147,7 +159,7 @@ async def delete_conversation(
     conversation_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
-    """Delete a conversation and all its messages."""
+    """Delete a conversation session and all its messages."""
     success = conversation_crud.delete_conversation(
         conversation_id=conversation_id,
         user_id=current_user.user_id
@@ -161,6 +173,19 @@ async def delete_conversation(
     
     return {"status": "success", "message": "Conversation deleted"}
 
+@router.get("/conversations/stats/summary")
+async def get_conversation_stats(
+    current_user: Annotated[User, Depends(get_current_active_user)] = None
+):
+    """Get statistics about user's conversations."""
+    total_conversations = conversation_crud.get_user_conversation_count(current_user.user_id)
+    
+    return {
+        "user_id": current_user.user_id,
+        "total_conversations": total_conversations
+    }
+
+
 
 # ========== CHAT ENDPOINT WITH HISTORY ==========
 
@@ -172,24 +197,24 @@ async def chat(
     current_user: Annotated[User, Depends(get_current_active_user)] = None
 ):
     """
-    Enhanced chat endpoint with conversation history support.
+    Send a message within a conversation session.
+    
+    Workflow:
+    1. If conversation_id provided: Continue existing session
+    2. If no conversation_id: Create new session automatically
+    3. Add user message to session
+    4. Get AI response with conversation history
+    5. Add assistant response to session
     
     Parameters:
     - message: User's text query (required)
-    - conversation_id: Optional conversation ID to continue existing conversation
-                      If None, creates a new conversation
+    - conversation_id: Optional session ID to continue conversation
     - image: Optional image file for visual search
-    
-    Response includes:
-    - response: Human-readable message
-    - products: Array of product objects (if search was performed)
-    - conversation_id: ID of the conversation
-    - message_count: Total messages in this conversation
     """
     if not message or not message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
-    # Get or create conversation
+    # Get or create conversation session
     if conversation_id:
         conversation = conversation_crud.get_conversation(
             conversation_id=conversation_id,
@@ -198,9 +223,12 @@ async def chat(
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
-        # Create new conversation
+        # Auto-create new session
         conversation = conversation_crud.create_conversation(
-            ConversationCreate(user_id=current_user.user_id, title=None)
+            ConversationCreate(
+                user_id=current_user.user_id,
+                title=None  # Will use default timestamp-based title
+            )
         )
         conversation_id = conversation.conversation_id
     
@@ -226,7 +254,7 @@ async def chat(
     elif image and not isinstance(image, UploadFile):
         image = None
     
-    # Save user message
+    # Save user message to session
     conversation_crud.add_message(
         conversation_id=conversation_id,
         user_id=current_user.user_id,
@@ -235,11 +263,11 @@ async def chat(
         uploaded_image_url=uploaded_image_url
     )
     
-    # Get conversation history for context
+    # Get conversation history for context (last 10 messages)
     conversation_with_messages = conversation_crud.get_conversation_with_messages(
         conversation_id=conversation_id,
         user_id=current_user.user_id,
-        limit=10  # Last 10 messages for context
+        limit=10
     )
     
     # Build messages for agent (include history)
@@ -349,7 +377,7 @@ async def chat(
     
     assistant_response = final_content or f"Tool {tool_called} was executed successfully"
     
-    # Save assistant message
+    # Save assistant message to session
     conversation_crud.add_message(
         conversation_id=conversation_id,
         user_id=current_user.user_id,
@@ -395,7 +423,7 @@ async def chat(
     )
 
 
-# ========== DIRECT SEARCH ENDPOINTS (NO HISTORY) ==========
+# ========== DIRECT SEARCH ENDPOINTS (NO SESSIONS) ==========
 
 @router.get("/search/text")
 async def search_text(
@@ -462,6 +490,8 @@ async def search_visual_upload(
             detail=f"Visual search failed: {str(e)}"
         )
 
+
+# ========== FILE MANAGEMENT ==========
 
 @router.get("/my-uploads")
 async def list_my_uploads(
