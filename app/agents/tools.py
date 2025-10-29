@@ -2,13 +2,32 @@ import json
 from langchain.tools import tool
 from app.services.embedding_service import get_embedding_service
 
+@tool("handle_conversation", description="Handle conversational queries without search/orders")
+def handle_conversation(query_type: str, user_message: str) -> str:
+    """
+    Handle general conversation, greetings, capability questions, and follow-ups.
+    
+    Args:
+        query_type: "greeting", "capability", "clarification", "follow_up", "history_reference"
+        user_message: The original user message
+    """
+    print(f"💬 Conversation tool called")
+    print(f"   Type: {query_type}")
+    print(f"   Message: {user_message}")
+    
+    return json.dumps({
+        "status": "success",
+        "tool": "handle_conversation",
+        "query_type": query_type,
+        "user_message": user_message,
+        "instruction": "Use conversation history to respond naturally and helpfully."
+    }, indent=2)
 
 @tool("order_details", description="Get details about a specific order")
 def get_order_details(query: str) -> str:
     """Get details about a specific order based on the user query."""
     print(f"🔍 Order tool called with query: {query}")
     
-    # TODO: Implement actual order lookup logic
     return json.dumps({
         "status": "success",
         "message": "Order tracking feature - connect to your order database",

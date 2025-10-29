@@ -378,21 +378,42 @@ async def chat(
     query = None
     products_json = None  # For storing in DB
     
-    if tool_response_raw:
-        extracted = extract_products_from_tool_response(tool_response_raw)
-        if extracted:
-            products = [ProductResult(**p) for p in extracted]
-            results_count = len(products)
-            
-            # Store products as JSON string for database
-            import json
-            products_json = json.dumps(extracted)
-            
-            try:
-                data = json.loads(tool_response_raw)
-                query = data.get("query")
-            except:
-                pass
+    if tool_called == "handle_conversation":
+        # Conversational queries - no products to extract
+        # The LLM response is already generated, just use it
+        products = None
+        results_count = None
+        query = message  # Use original user message as query
+        
+    elif tool_called in ["search_products", "visual_search_products"]:
+        # Product search tools - extract products from tool response
+        if tool_response_raw:
+            extracted = extract_products_from_tool_response(tool_response_raw)
+            if extracted:
+                products = [ProductResult(**p) for p in extracted]
+                results_count = len(products)
+                
+                # Store products as JSON string for database
+                import json
+                products_json = json.dumps(extracted)
+                
+                try:
+                    data = json.loads(tool_response_raw)
+                    query = data.get("query")
+                except:
+                    pass
+    
+    elif tool_called == "get_order_details":
+        # Order lookup tool - no products to extract
+        products = None
+        results_count = None
+        query = message
+        # Could extract order info here if needed
+    
+    else:
+        # Unknown tool - log warning but continue
+        print(f"⚠️  Unknown tool called: {tool_called}")
+        query = message
     
     # Save assistant message to session (with products data)
     conversation_crud.add_message(
