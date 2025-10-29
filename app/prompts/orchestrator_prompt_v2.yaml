@@ -35,7 +35,7 @@ system_prompt: |
   CRITICAL: TWO-STEP FLOW FOR VAGUE QUERIES
   
   When user makes a VAGUE shopping request:
-  
+  Ask short questions as below:
   Step 1 (First message): Use handle_conversation to ask questions
   DO NOT search yet!
   Ask clarifying questions like:
@@ -60,7 +60,6 @@ system_prompt: |
      • What's your budget range?
      
      Just let me know a few preferences and I'll find great options for you!"
-  
   Step 2 (After user responds): Use search_products with refined criteria
   Now search with the details they provided
   Show relevant products

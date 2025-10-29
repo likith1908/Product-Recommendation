@@ -241,7 +241,6 @@ async def chat(
                 file=image,
                 user_id=current_user.user_id
             )
-            print(f"📸 Image uploaded: {uploaded_image_url}")
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -266,7 +265,6 @@ async def chat(
         limit=10
     )
     
-    # ✅ BUILD MESSAGES CORRECTLY FOR LANGCHAIN
     agent_messages = []
     for msg in conversation_with_messages.messages[:-1]:  # Exclude the just-added user message
         if msg.role == "user":
@@ -289,9 +287,6 @@ async def chat(
 
     try:
         config = {"recursion_limit": 15}
-        
-        print(f"🤖 Calling agent with {len(agent_messages)} messages in history")
-        print(f"   Current message: {user_message[:100]}...")
         
         for chunk in orchestrator_agent.stream(
             {"messages": agent_messages}, 
@@ -334,12 +329,20 @@ async def chat(
                                     pass
                             
                             # Capture final content (agent's response)
+                            # Key fix: Check for AIMessage type (LangChain's assistant message)
                             try:
-                                if hasattr(msg, "content") and msg.content and hasattr(msg, "role") and msg.role == "assistant":
-                                    # Only capture if it's not a tool message
+                                from langchain_core.messages import AIMessage as LangChainAIMessage
+                                
+                                if isinstance(msg, LangChainAIMessage):
+                                    # It's a LangChain AIMessage
+                                    if msg.content and not msg.tool_calls:
+                                        final_content = msg.content
+                                elif hasattr(msg, "content") and msg.content and hasattr(msg, "role") and msg.role == "assistant":
+                                    # Fallback: check role attribute
                                     if not hasattr(msg, "tool_calls") or not msg.tool_calls:
                                         final_content = msg.content
                                 elif isinstance(msg, dict) and msg.get("content") and msg.get("role") == "assistant":
+                                    # Fallback: dict format
                                     if not msg.get("tool_calls"):
                                         final_content = msg["content"]
                             except (AttributeError, KeyError):
@@ -360,7 +363,7 @@ async def chat(
             detail="System error: Agent failed to use a required tool."
         )
 
-    # Extract best final content if not found yet
+    # Try to extract final content from last chunk if not found
     if not final_content and all_chunks:
         last_chunk = all_chunks[-1]
         if isinstance(last_chunk, dict):
@@ -369,9 +372,16 @@ async def chat(
                     msgs = node_output["messages"]
                     if not isinstance(msgs, list):
                         msgs = [msgs]
+                    
                     for msg in reversed(msgs):
                         try:
-                            if hasattr(msg, "content") and msg.content and hasattr(msg, "role") and msg.role == "assistant":
+                            # Check for AIMessage type first (most reliable)
+                            if isinstance(msg, LangChainAIMessage):
+                                if msg.content and not msg.tool_calls:
+                                    final_content = msg.content
+                                    break
+                            # Fallback checks
+                            elif hasattr(msg, "content") and msg.content and hasattr(msg, "role") and msg.role == "assistant":
                                 if not hasattr(msg, "tool_calls") or not msg.tool_calls:
                                     final_content = msg.content
                                     break
@@ -381,6 +391,7 @@ async def chat(
                                     break
                         except (AttributeError, KeyError):
                             pass
+                
                 if final_content:
                     break
 
