@@ -20,7 +20,7 @@ def handle_conversation(query_type: str, user_message: str) -> str:
         "tool": "handle_conversation",
         "query_type": query_type,
         "user_message": user_message,
-        "instruction": "Use conversation history to respond naturally and helpfully."
+        "instruction": "This is a conversational query. Use the conversation history to provide a natural, helpful response."
     }, indent=2)
 
 @tool("order_details", description="Get details about a specific order")

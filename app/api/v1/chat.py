@@ -285,7 +285,7 @@ async def chat(
     tool_called = None
     final_content = None
     tool_response_raw = None
-    
+
     try:
         config = {"recursion_limit": 10}
         for chunk in orchestrator_agent.stream(
@@ -317,25 +317,29 @@ async def chat(
                             except (IndexError, AttributeError, KeyError):
                                 pass
                             
-                            # Capture tool response
-                            try:
-                                if hasattr(msg, "name") and msg.name in ["search_products", "visual_search_products"]:
-                                    if hasattr(msg, "content"):
-                                        tool_response_raw = msg.content
-                                elif isinstance(msg, dict) and msg.get("name") in ["search_products", "visual_search_products"]:
-                                    tool_response_raw = msg.get("content")
-                            except (AttributeError, KeyError):
-                                pass
+                            # Capture tool response (for product search tools only)
+                            if tool_called in ["search_products", "visual_search_products"]:
+                                try:
+                                    if hasattr(msg, "name") and msg.name in ["search_products", "visual_search_products"]:
+                                        if hasattr(msg, "content"):
+                                            tool_response_raw = msg.content
+                                    elif isinstance(msg, dict) and msg.get("name") in ["search_products", "visual_search_products"]:
+                                        tool_response_raw = msg.get("content")
+                                except (AttributeError, KeyError):
+                                    pass
                             
-                            # Capture final content
+                            # Capture final content (agent's response)
                             try:
                                 if hasattr(msg, "content") and msg.content and hasattr(msg, "role") and msg.role == "assistant":
-                                    final_content = msg.content
+                                    # Only capture if it's not a tool message
+                                    if not hasattr(msg, "tool_calls") or not msg.tool_calls:
+                                        final_content = msg.content
                                 elif isinstance(msg, dict) and msg.get("content") and msg.get("role") == "assistant":
-                                    final_content = msg["content"]
+                                    if not msg.get("tool_calls"):
+                                        final_content = msg["content"]
                             except (AttributeError, KeyError):
                                 pass
-    
+
     except Exception as e:
         if "recursion" in str(e).lower() and tool_called:
             pass
@@ -344,14 +348,14 @@ async def chat(
                 status_code=500,
                 detail=f"Agent execution error: {str(e)}"
             )
-    
+
     if not tool_called:
         raise HTTPException(
             status_code=500,
             detail="System error: Agent failed to use a required tool."
         )
-    
-    # Extract best final content
+
+    # Extract best final content if not found yet
     if not final_content and all_chunks:
         last_chunk = all_chunks[-1]
         if isinstance(last_chunk, dict):
@@ -361,68 +365,62 @@ async def chat(
                     if not isinstance(msgs, list):
                         msgs = [msgs]
                     for msg in reversed(msgs):
-                        if hasattr(msg, "content") and msg.content:
-                            final_content = msg.content
-                            break
-                        elif isinstance(msg, dict) and msg.get("content"):
-                            final_content = msg["content"]
-                            break
+                        try:
+                            if hasattr(msg, "content") and msg.content and hasattr(msg, "role") and msg.role == "assistant":
+                                if not hasattr(msg, "tool_calls") or not msg.tool_calls:
+                                    final_content = msg.content
+                                    break
+                            elif isinstance(msg, dict) and msg.get("content") and msg.get("role") == "assistant":
+                                if not msg.get("tool_calls"):
+                                    final_content = msg["content"]
+                                    break
+                        except (AttributeError, KeyError):
+                            pass
                 if final_content:
                     break
-    
-    assistant_response = final_content or f"Tool {tool_called} was executed successfully"
-    
-    # Extract structured product data
+
+    # Handle different tool types
     products = None
     results_count = None
-    query = None
-    products_json = None  # For storing in DB
-    
+    query = message
+    products_json = None
+
     if tool_called == "handle_conversation":
-        # Conversational queries - no products to extract
-        # The LLM response is already generated, just use it
-        products = None
-        results_count = None
-        query = message  # Use original user message as query
+        # Conversational tool - agent should have generated natural response
+        assistant_response = final_content or "I'm here to help! What would you like to know?"
         
     elif tool_called in ["search_products", "visual_search_products"]:
-        # Product search tools - extract products from tool response
+        # Product search - extract products and use agent's formatted response
         if tool_response_raw:
             extracted = extract_products_from_tool_response(tool_response_raw)
             if extracted:
                 products = [ProductResult(**p) for p in extracted]
                 results_count = len(products)
-                
-                # Store products as JSON string for database
-                import json
                 products_json = json.dumps(extracted)
                 
                 try:
                     data = json.loads(tool_response_raw)
-                    query = data.get("query")
+                    query = data.get("query") or message
                 except:
                     pass
-    
+        
+        assistant_response = final_content or "I found some products for you."
+        
     elif tool_called == "get_order_details":
-        # Order lookup tool - no products to extract
-        products = None
-        results_count = None
-        query = message
-        # Could extract order info here if needed
-    
+        # Order tool
+        assistant_response = final_content or "Let me check your order details."
+        
     else:
-        # Unknown tool - log warning but continue
-        print(f"⚠️  Unknown tool called: {tool_called}")
-        query = message
-    
-    # Save assistant message to session (with products data)
+        assistant_response = final_content or f"Tool {tool_called} was executed successfully"
+
+    # Save assistant message
     conversation_crud.add_message(
         conversation_id=conversation_id,
         user_id=current_user.user_id,
         role="assistant",
         content=assistant_response,
         tool_called=tool_called,
-        products_data=products_json  # ← Store products here
+        products_data=products_json
     )
     
     # Get updated message count
