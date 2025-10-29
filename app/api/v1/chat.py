@@ -262,9 +262,9 @@ async def chat(
     conversation_with_messages = conversation_crud.get_conversation_with_messages(
         conversation_id=conversation_id,
         user_id=current_user.user_id,
-        limit=10
+        limit=50
     )
-    
+
     agent_messages = []
     for msg in conversation_with_messages.messages[:-1]:  # Exclude the just-added user message
         if msg.role == "user":
@@ -279,6 +279,23 @@ async def chat(
     
     agent_messages.append(HumanMessage(content=user_message))
     
+    print("\n" + "="*80)
+    print("📜 CONVERSATION HISTORY BEING SENT TO AGENT")
+    print("="*80)
+    print(f"Total messages in history: {len(agent_messages)}")
+    print(f"Conversation ID: {conversation_id}")
+    print("\n")
+
+    for i, msg in enumerate(agent_messages, 1):
+        role = "USER" if isinstance(msg, HumanMessage) else "ASSISTANT"
+        print(f"[Message {i}] {role}:")
+        print(f"  Content: {msg.content[:200]}{'...' if len(msg.content) > 200 else ''}")
+        print()
+
+    print("="*80)
+    print("🤖 CALLING AGENT NOW...")
+    print("="*80 + "\n")
+
     # Call agent
     all_chunks = []
     tool_called = None
