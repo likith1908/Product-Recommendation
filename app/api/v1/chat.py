@@ -2,6 +2,7 @@ from typing import Annotated, Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from pydantic import BaseModel
+from langchain_core.messages import HumanMessage, AIMessage
 
 from app.api.deps import get_current_active_user
 from app.models.user import User
@@ -14,7 +15,7 @@ from app.crud import conversation as conversation_crud
 from app.agents.orchestrator import create_orchestrator_agent
 from app.services.embedding_service import get_embedding_service
 from app.services.gcs_service import get_gcs_service
-
+import json
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -265,20 +266,20 @@ async def chat(
         limit=10
     )
     
-    # Build messages for agent (include history)
+    # ✅ BUILD MESSAGES CORRECTLY FOR LANGCHAIN
     agent_messages = []
     for msg in conversation_with_messages.messages[:-1]:  # Exclude the just-added user message
-        agent_messages.append({
-            "role": msg.role,
-            "content": msg.content
-        })
+        if msg.role == "user":
+            agent_messages.append(HumanMessage(content=msg.content))
+        elif msg.role == "assistant":
+            agent_messages.append(AIMessage(content=msg.content))
     
     # Add current message with image context if provided
     user_message = message
     if uploaded_image_url:
         user_message += f"\n[User provided image URL: {uploaded_image_url}]"
     
-    agent_messages.append({"role": "user", "content": user_message})
+    agent_messages.append(HumanMessage(content=user_message))
     
     # Call agent
     all_chunks = []
@@ -287,7 +288,11 @@ async def chat(
     tool_response_raw = None
 
     try:
-        config = {"recursion_limit": 10}
+        config = {"recursion_limit": 15}
+        
+        print(f"🤖 Calling agent with {len(agent_messages)} messages in history")
+        print(f"   Current message: {user_message[:100]}...")
+        
         for chunk in orchestrator_agent.stream(
             {"messages": agent_messages}, 
             config=config,
