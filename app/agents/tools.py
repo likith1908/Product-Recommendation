@@ -1,10 +1,16 @@
 import json
+import sqlite3
+from pathlib import Path
+from typing import List, Dict, Optional
 from langchain.tools import tool
 from app.services.embedding_service import get_embedding_service
 import csv
-from pathlib import Path
 
+# Database paths
 POLICIES_DATA = None
+SAMPLE_DB_PATH = Path(__file__).parent.parent.parent / "sample_data.db"
+
+
 def load_policies():
     """Load policies from CSV file"""
     global POLICIES_DATA
@@ -21,21 +27,126 @@ def load_policies():
     
     return POLICIES_DATA
 
+
+def get_order_db_connection():
+    """Get connection to sample_data.db"""
+    conn = sqlite3.connect(str(SAMPLE_DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def fetch_user_orders(user_id: str, limit: int = 10) -> List[Dict]:
+    """
+    Fetch user's order history from sample_data.db
+    
+    Returns list of orders with all details
+    """
+    try:
+        conn = get_order_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT 
+                order_id, user_id, product_id, product_name, customer_name,
+                email, quantity, order_date, order_status, delivery_date,
+                total_amount, discount_applied, payment_status,
+                shipping_street, shipping_city, shipping_state,
+                shipping_pincode, shipping_country, created_at
+            FROM orders
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (user_id, limit))
+        
+        orders = []
+        for row in cur.fetchall():
+            orders.append({
+                'order_id': row['order_id'],
+                'user_id': row['user_id'],
+                'product_id': row['product_id'],
+                'product_name': row['product_name'],
+                'customer_name': row['customer_name'],
+                'email': row['email'],
+                'quantity': row['quantity'],
+                'order_date': row['order_date'],
+                'order_status': row['order_status'],
+                'delivery_date': row['delivery_date'],
+                'total_amount': row['total_amount'],
+                'discount_applied': row['discount_applied'],
+                'payment_status': row['payment_status'],
+                'shipping_address': {
+                    'street': row['shipping_street'],
+                    'city': row['shipping_city'],
+                    'state': row['shipping_state'],
+                    'pincode': row['shipping_pincode'],
+                    'country': row['shipping_country']
+                },
+                'created_at': row['created_at']
+            })
+        
+        conn.close()
+        return orders
+    
+    except Exception as e:
+        print(f"❌ Error fetching orders: {e}")
+        return []
+
+
+@tool("get_order_details", description="Get specific order details by order ID or track recent orders")
+def get_order_details(query: str) -> str:
+    """
+    Get details about specific orders based on order ID or general tracking queries.
+    
+    Args:
+        query: Order ID (e.g., "ORD001") or general query like "track my order", "order status"
+    
+    Examples:
+    - "What's the status of order ORD001?"
+    - "Track my order ORD123"
+    - "Where is my order?"
+    - "When will my order arrive?"
+    
+    Note: This tool expects user_id to be in the query context (set by the system)
+    """
+    print(f"📦 Order details tool called with query: {query}")
+    
+    # Extract order ID if present (pattern: ORD followed by digits)
+    import re
+    order_id_match = re.search(r'ORD\d+', query.upper())
+    
+    return json.dumps({
+        "status": "success",
+        "tool": "get_order_details",
+        "query": query,
+        "order_id": order_id_match.group(0) if order_id_match else None,
+        "instruction": (
+            "Use the user's order history from context to answer this question. "
+            "If specific order ID is mentioned, focus on that order. "
+            "Otherwise, show recent orders and their status. "
+            "Be helpful with delivery dates, tracking info, and order status."
+        )
+    }, indent=2)
+
+
 @tool("get_policy_info", description="Get warranty, return, replacement, and other policy information")
 def get_policy_info(query: str) -> str:
     """
     Retrieve policy information about warranty, returns, replacements, etc.
     
     Args:
-        query: User's policy question (e.g., "warranty period", "return policy", "can I return custom glasses")
+        query: User's policy question (e.g., "return policy for ORD001", "warranty", "can I return")
     
     Examples:
     - "What's the warranty period?"
-    - "Can I return these glasses?"
+    - "Can I return order ORD001?"
+    - "I want to return my glasses from order ORD123"
     - "What if my glasses arrive damaged?"
-    - "Tell me about replacement policy"
     """
     print(f"📋 Policy tool called with query: {query}")
+    
+    # Extract order ID if present
+    import re
+    order_id_match = re.search(r'ORD\d+', query.upper())
     
     try:
         policies = load_policies()
@@ -44,7 +155,6 @@ def get_policy_info(query: str) -> str:
         # Keyword matching for relevant policies
         relevant_policies = []
         
-        # Check for specific policy types
         policy_keywords = {
             "warranty": ["warranty", "defect", "manufacturing"],
             "return": ["return", "refund", "money back", "not satisfied"],
@@ -53,89 +163,121 @@ def get_policy_info(query: str) -> str:
             "extended": ["extended", "additional coverage", "accidental damage"]
         }
         
-        # Match query to policy types
         matched_types = set()
         for policy_type, keywords in policy_keywords.items():
             if any(keyword in query_lower for keyword in keywords):
                 matched_types.add(policy_type)
         
-        # If no specific match, return all policies
         if not matched_types:
             relevant_policies = policies
         else:
-            # Filter policies by matched types
             for policy in policies:
                 policy_type_lower = policy["Policy Type"].lower()
                 if any(ptype in policy_type_lower for ptype in matched_types):
                     relevant_policies.append(policy)
         
         if not relevant_policies:
-            relevant_policies = policies  # Fallback to all
+            relevant_policies = policies
         
-        # Format response
-        return json.dumps({
+        response_data = {
             "status": "success",
             "tool": "get_policy_info",
             "query": query,
+            "order_id": order_id_match.group(0) if order_id_match else None,
             "policies": relevant_policies,
             "instruction": (
                 "Present these policies clearly to the user. "
                 "Use bullet points for conditions. "
                 "Highlight key timeframes (10 days, 15 days, 12 months). "
-                "If the query is complex or user seems unsure, offer to connect them with customer support."
+                "If order ID is mentioned, check the user's order history from context and provide specific guidance. "
+                "For complex situations, offer to connect with customer support."
             )
-        }, indent=2)
+        }
+        
+        # If order ID mentioned, add note about checking order details
+        if order_id_match:
+            response_data["note"] = (
+                "Order ID detected. Use the user's order history from context "
+                "to provide specific policy guidance for this order (e.g., delivery date for return window)."
+            )
+        
+        return json.dumps(response_data, indent=2)
     
     except Exception as e:
         return json.dumps({
             "status": "error",
             "message": f"Failed to retrieve policy info: {str(e)}",
-            "instruction": "Apologize and offer to connect user with customer support for policy questions."
+            "instruction": "Apologize and offer to connect user with customer support."
         }, indent=2)
 
-@tool("handle_conversation", description="Handle conversational queries without search/orders")
+
+@tool("handle_conversation", description="Handle conversational queries, use order history ONLY for shopping/order-related questions")
 def handle_conversation(query_type: str, user_message: str) -> str:
     """
-    Handle general conversation, greetings, capability questions, and follow-ups.
+    Handle general conversation, greetings, and provide context-aware responses.
     
     Args:
         query_type: "greeting", "capability", "clarification", "follow_up", "history_reference"
         user_message: The original user message
+    
+    IMPORTANT: Order history is available but should be used selectively:
+    - Pure greetings ("hi", "hello"): DO NOT mention order history
+    - Shopping requests ("I need glasses"): Use order history to personalize
+    - Order queries ("where's my order"): Use order history for details
+    - Follow-ups about products: Use order history if relevant
     """
     print(f"💬 Conversation tool called")
     print(f"   Type: {query_type}")
     print(f"   Message: {user_message}")
+    
+    # Determine if this is a pure greeting with no shopping intent
+    is_pure_greeting = query_type == "greeting" and user_message.lower().strip() in [
+        'hi', 'hello', 'hey', 'hi there', 'hello there', 'good morning', 
+        'good afternoon', 'good evening', 'greetings', 'howdy'
+    ]
+    
+    instruction = "This is a conversational query. "
+    
+    if is_pure_greeting:
+        instruction += (
+            "DO NOT mention order history or past purchases. "
+            "Keep the greeting brief, welcoming, and professional. "
+            "List your capabilities and ask what they need help with."
+        )
+    elif query_type == "clarification":
+        instruction += (
+            "User has shopping intent. Use order history to personalize clarifying questions. "
+            "Reference past purchases briefly to show you remember them, "
+            "then ask what they're looking for today."
+        )
+    else:
+        instruction += (
+            "Use conversation history and order history appropriately. "
+            "If discussing products, reference past purchases naturally. "
+            "If just chatting, keep order history subtle."
+        )
     
     return json.dumps({
         "status": "success",
         "tool": "handle_conversation",
         "query_type": query_type,
         "user_message": user_message,
-        "instruction": "This is a conversational query. Use the conversation history to provide a natural, helpful response to the user using the conversation history."
-    }, indent=2)
-
-@tool("order_details", description="Get details about a specific order")
-def get_order_details(query: str) -> str:
-    """Get details about a specific order based on the user query."""
-    print(f"🔍 Order tool called with query: {query}")
-    
-    return json.dumps({
-        "status": "success",
-        "message": "Order tracking feature - connect to your order database",
-        "query": query,
-        "note": "This is a placeholder. Implement your order tracking logic here."
+        "is_pure_greeting": is_pure_greeting,
+        "instruction": instruction
     }, indent=2)
 
 
-@tool("search_products", description="Search and recommend products using semantic understanding")
+@tool("search_products", description="Search and recommend products using semantic understanding and user preferences")
 def search_products(query: str) -> str:
     """
-    Search products using semantic embeddings. Understands natural language queries.
+    Search products using semantic embeddings with awareness of user's order history.
     
     Examples:
     - "Show me black wayfarer glasses"
     - "I need reading glasses for a round face"
     - "Lightweight sports sunglasses under 2000 rupees"
+    
+    Note: User's order history is available in context for better recommendations
     """
     print(f"🔍 Product search tool called with query: {query}")
     
@@ -150,7 +292,6 @@ def search_products(query: str) -> str:
         brands = ["john jacobs", "ray-ban", "oakley", "vincent chase"]
         for brand in brands:
             if brand in query_lower:
-                # Capitalize properly
                 filters["Brand Name"] = brand.title()
                 break
         
@@ -197,7 +338,12 @@ def search_products(query: str) -> str:
             "status": "success",
             "query": query,
             "results_count": len(formatted_results),
-            "products": formatted_results
+            "products": formatted_results,
+            "instruction": (
+                "Present these products to the user. "
+                "If user's order history shows similar preferences, mention that. "
+                "Use order history to make personalized suggestions."
+            )
         }, indent=2)
     
     except Exception as e:
@@ -216,10 +362,6 @@ def visual_search_products(image_url: str, text_description: str = "") -> str:
     Args:
         image_url: URL of the reference product image
         text_description: Optional text like "but in blue color" or "cheaper alternatives"
-    
-    Examples:
-    - visual_search_products("https://...", "similar but cheaper")
-    - visual_search_products("https://...", "same style in brown")
     """
     print(f"🖼️  Visual search tool called")
     print(f"   Image: {image_url[:60]}...")
@@ -228,17 +370,14 @@ def visual_search_products(image_url: str, text_description: str = "") -> str:
     try:
         embedding_service = get_embedding_service()
         
-        # Determine search mode
         if text_description:
-            # Hybrid search: image + text
             results = embedding_service.search_by_image_and_text(
                 image_url=image_url,
                 text_query=text_description,
                 top_k=5,
-                text_weight=0.4  # 40% text, 60% image
+                text_weight=0.4
             )
         else:
-            # Pure image search
             results = embedding_service.search_by_image_and_text(
                 image_url=image_url,
                 top_k=5
@@ -251,7 +390,6 @@ def visual_search_products(image_url: str, text_description: str = "") -> str:
                 "image_url": image_url
             }, indent=2)
         
-        # Format results
         formatted_results = []
         for product in results:
             formatted_results.append({
@@ -279,4 +417,3 @@ def visual_search_products(image_url: str, text_description: str = "") -> str:
             "message": f"Visual search failed: {str(e)}",
             "image_url": image_url
         }, indent=2)
-    

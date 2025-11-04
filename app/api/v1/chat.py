@@ -15,6 +15,14 @@ from app.crud import conversation as conversation_crud
 from app.agents.orchestrator import create_orchestrator_agent
 from app.services.embedding_service import get_embedding_service
 from app.services.gcs_service import get_gcs_service
+from app.agents.tools import fetch_user_orders
+from app.agents.tools import fetch_user_orders
+from app.utils.order_utils import (
+    format_orders_list, 
+    extract_product_preferences,
+    check_return_eligibility,
+    check_replacement_eligibility
+)
 import json
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -193,18 +201,7 @@ async def chat(
 ):
     """
     Send a message within a conversation session.
-    
-    Workflow:
-    1. If conversation_id provided: Continue existing session
-    2. If no conversation_id: Create new session automatically
-    3. Add user message to session
-    4. Get AI response with conversation history
-    5. Add assistant response to session
-    
-    Parameters:
-    - message: User's text query (required)
-    - conversation_id: Optional session ID to continue conversation
-    - image: Optional image file for visual search
+    NOW WITH ORDER HISTORY CONTEXT!
     """
     if not message or not message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
@@ -218,11 +215,10 @@ async def chat(
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
-        # Auto-create new session
         conversation = conversation_crud.create_conversation(
             ConversationCreate(
                 user_id=current_user.user_id,
-                title=None  # Will use default timestamp-based title
+                title=None
             )
         )
         conversation_id = conversation.conversation_id
@@ -257,7 +253,131 @@ async def chat(
         uploaded_image_url=uploaded_image_url
     )
     
-    # Get conversation history for context (last 10 messages)
+    # ============================================
+    # 🆕 FETCH USER'S ORDER HISTORY
+    # ============================================
+    user_orders = fetch_user_orders(current_user.user_id, limit=10)
+    
+    # Format order context with rich details
+    order_context = ""
+    if user_orders:
+        # Extract preferences
+        prefs = extract_product_preferences(user_orders)
+        
+        order_context = "\n\n" + "="*50 + "\n"
+        order_context += "USER'S ORDER HISTORY & PREFERENCES\n"
+        order_context += "="*50 + "\n\n"
+        
+        # Summary stats
+        order_context += f"📊 SUMMARY:\n"
+        order_context += f"- Total orders: {len(user_orders)}\n"
+        if prefs.get('favorite_brand'):
+            order_context += f"- Favorite brand: {prefs['favorite_brand']}\n"
+        order_context += f"- Average order value: ₹{prefs.get('average_price', 0)}\n"
+        
+        # Preferences
+        if prefs['has_sunglasses']:
+            order_context += f"- Has purchased sunglasses ✓\n"
+        if prefs['has_reading_glasses']:
+            order_context += f"- Has purchased reading glasses ✓\n"
+        if prefs['has_computer_glasses']:
+            order_context += f"- Has purchased computer/blue light glasses ✓\n"
+        
+        order_context += "\n"
+        
+        # Detailed order list
+        order_context += "📦 RECENT ORDERS:\n\n"
+        
+        for idx, order in enumerate(user_orders, 1):
+            order_context += f"{idx}. Order {order['order_id']}:\n"
+            order_context += f"   Product: {order['product_name']} (ID: {order['product_id']})\n"
+            order_context += f"   Status: {order['order_status']}\n"
+            order_context += f"   Order Date: {order['order_date']}\n"
+            
+            # Delivery and eligibility info
+            if order['delivery_date']:
+                order_context += f"   Delivered: {order['delivery_date']}\n"
+                
+                # Check return/replacement eligibility
+                return_check = check_return_eligibility(order['delivery_date'])
+                replacement_check = check_replacement_eligibility(order['delivery_date'])
+                
+                order_context += f"   📅 {return_check['days_since_delivery']} days since delivery\n"
+                
+                if return_check['eligible']:
+                    order_context += f"   ✅ RETURN ELIGIBLE ({return_check['days_remaining']} days left)\n"
+                else:
+                    order_context += f"   ❌ Return window expired\n"
+                
+                if replacement_check['eligible']:
+                    order_context += f"   ✅ REPLACEMENT ELIGIBLE ({replacement_check['days_remaining']} days left)\n"
+                else:
+                    order_context += f"   ❌ Replacement window expired\n"
+            else:
+                order_context += f"   Status: {order['order_status']} (not yet delivered)\n"
+                order_context += f"   ✅ Can claim damaged/defective on arrival\n"
+            
+            order_context += f"   Amount: ₹{order['total_amount']}"
+            if order.get('discount_applied') and order['discount_applied'] > 0:
+                order_context += f" (Saved: ₹{order['discount_applied']})"
+            order_context += "\n"
+            
+            order_context += f"   Payment: {order['payment_status']}\n"
+            
+            if order['shipping_address']['city']:
+                order_context += f"   Shipping: {order['shipping_address']['city']}, {order['shipping_address']['state']}\n"
+            
+            order_context += "\n"
+        
+        # Instructions for using this data
+        order_context += "="*50 + "\n"
+        order_context += "HOW TO USE THIS INFORMATION:\n"
+        order_context += "="*50 + "\n"
+        order_context += """
+1. PERSONALIZATION:
+   - Reference past purchases naturally
+   - Suggest similar or complementary products
+   - Acknowledge their preferences
+
+2. ORDER QUERIES:
+   - For order tracking: provide specific status and dates
+   - For shipping: check order status and delivery date
+   
+3. RETURNS/REFUNDS:
+   - If NO order ID mentioned: list orders and ask which one
+   - If order ID mentioned: check eligibility automatically
+   - Use delivery date to calculate days remaining
+   - Be clear about eligibility status
+   
+4. POLICY QUESTIONS:
+   - For returns: Check if within 10-day window
+   - For replacements: Check if within 15-day window
+   - Reference specific order dates when advising
+   
+5. PRODUCT RECOMMENDATIONS:
+   - Consider past purchases (sunglasses vs regular glasses)
+   - Suggest brands they've bought before
+   - Stay within their typical price range
+   - Ask if they want similar or different styles
+
+REMEMBER: Make responses personal and helpful!
+"""
+        order_context += "="*50 + "\n\n"
+    else:
+        order_context = "\n\n" + "="*50 + "\n"
+        order_context += "USER'S ORDER HISTORY\n"
+        order_context += "="*50 + "\n"
+        order_context += "🆕 NEW CUSTOMER - No previous orders\n\n"
+        order_context += "APPROACH:\n"
+        order_context += "- Be extra welcoming and helpful\n"
+        order_context += "- Explain return/warranty policies proactively\n"
+        order_context += "- Ask detailed questions to understand needs\n"
+        order_context += "- Build trust by being thorough\n"
+        order_context += "="*50 + "\n\n"
+    
+    # ============================================
+    
+    # Get conversation history for context
     conversation_with_messages = conversation_crud.get_conversation_with_messages(
         conversation_id=conversation_id,
         user_id=current_user.user_id,
@@ -265,37 +385,44 @@ async def chat(
     )
 
     agent_messages = []
-    for msg in conversation_with_messages.messages[:-1]:  # Exclude the just-added user message
+    for msg in conversation_with_messages.messages[:-1]:  # Exclude just-added user message
         if msg.role == "user":
             agent_messages.append(HumanMessage(content=msg.content))
         elif msg.role == "assistant":
             agent_messages.append(AIMessage(content=msg.content))
     
-    # Add current message with image context if provided
+    # Add current message with image context AND order history
     user_message = message
     if uploaded_image_url:
         user_message += f"\n[User provided image URL: {uploaded_image_url}]"
     
+    # 🆕 PREPEND ORDER HISTORY TO FIRST MESSAGE
+    if len(agent_messages) == 0:
+        # First message in conversation - add order context
+        user_message = order_context + user_message
+    
     agent_messages.append(HumanMessage(content=user_message))
     
     print("\n" + "="*80)
-    print("📜 CONVERSATION HISTORY BEING SENT TO AGENT")
+    print("📜 CONVERSATION CONTEXT BEING SENT TO AGENT")
     print("="*80)
     print(f"Total messages in history: {len(agent_messages)}")
     print(f"Conversation ID: {conversation_id}")
+    print(f"User has {len(user_orders)} previous orders")
     print("\n")
 
     for i, msg in enumerate(agent_messages, 1):
         role = "USER" if isinstance(msg, HumanMessage) else "ASSISTANT"
         print(f"[Message {i}] {role}:")
-        print(f"  Content: {msg.content[:200]}{'...' if len(msg.content) > 200 else ''}")
+        content_preview = msg.content[:300] + "..." if len(msg.content) > 300 else msg.content
+        print(f"  Content: {content_preview}")
         print()
 
     print("="*80)
     print("🤖 CALLING AGENT NOW...")
     print("="*80 + "\n")
 
-    # Call agent
+    # Call agent (rest of the code remains the same)
     all_chunks = []
     tool_called = None
     final_content = None
@@ -344,21 +471,17 @@ async def chat(
                                 except (AttributeError, KeyError):
                                     pass
                             
-                            # Capture final content (agent's response)
-                            # Key fix: Check for AIMessage type (LangChain's assistant message)
+                            # Capture final content
                             try:
                                 from langchain_core.messages import AIMessage as LangChainAIMessage
                                 
                                 if isinstance(msg, LangChainAIMessage):
-                                    # It's a LangChain AIMessage
                                     if msg.content and not msg.tool_calls:
                                         final_content = msg.content
                                 elif hasattr(msg, "content") and msg.content and hasattr(msg, "role") and msg.role == "assistant":
-                                    # Fallback: check role attribute
                                     if not hasattr(msg, "tool_calls") or not msg.tool_calls:
                                         final_content = msg.content
                                 elif isinstance(msg, dict) and msg.get("content") and msg.get("role") == "assistant":
-                                    # Fallback: dict format
                                     if not msg.get("tool_calls"):
                                         final_content = msg["content"]
                             except (AttributeError, KeyError):
@@ -391,12 +514,10 @@ async def chat(
                     
                     for msg in reversed(msgs):
                         try:
-                            # Check for AIMessage type first (most reliable)
                             if isinstance(msg, LangChainAIMessage):
                                 if msg.content and not msg.tool_calls:
                                     final_content = msg.content
                                     break
-                            # Fallback checks
                             elif hasattr(msg, "content") and msg.content and hasattr(msg, "role") and msg.role == "assistant":
                                 if not hasattr(msg, "tool_calls") or not msg.tool_calls:
                                     final_content = msg.content
@@ -411,18 +532,16 @@ async def chat(
                 if final_content:
                     break
 
-    # Handle different tool types
+    # Handle different tool types (rest remains same)
     products = None
     results_count = None
     query = message
     products_json = None
 
     if tool_called == "handle_conversation":
-        # Conversational tool - agent should have generated natural response
         assistant_response = final_content or "I'm here to help! What would you like to know?"
         
     elif tool_called in ["search_products", "visual_search_products"]:
-        # Product search - extract products and use agent's formatted response
         if tool_response_raw:
             extracted = extract_products_from_tool_response(tool_response_raw)
             if extracted:
@@ -439,8 +558,10 @@ async def chat(
         assistant_response = final_content or "I found some products for you."
         
     elif tool_called == "get_order_details":
-        # Order tool
         assistant_response = final_content or "Let me check your order details."
+        
+    elif tool_called == "get_policy_info":
+        assistant_response = final_content or "Here's the policy information you requested."
         
     else:
         assistant_response = final_content or f"Tool {tool_called} was executed successfully"
@@ -472,7 +593,6 @@ async def chat(
         conversation_id=conversation_id,
         message_count=updated_conversation.message_count
     )
-
 
 # ========== DIRECT SEARCH ENDPOINTS (NO SESSIONS) ==========
 
