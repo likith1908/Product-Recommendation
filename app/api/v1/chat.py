@@ -19,7 +19,6 @@ import json
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# Create the orchestrator agent once at module level
 orchestrator_agent = create_orchestrator_agent()
 
 
