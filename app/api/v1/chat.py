@@ -422,7 +422,7 @@ REMEMBER: Make responses personal and helpful!
     print("🤖 CALLING AGENT NOW...")
     print("="*80 + "\n")
 
-    # Call agent (rest of the code remains the same)
+
     all_chunks = []
     tool_called = None
     final_content = None

@@ -12,18 +12,40 @@ SAMPLE_DB_PATH = Path(__file__).parent.parent.parent / "sample_data.db"
 
 
 def load_policies():
-    """Load policies from CSV file"""
+    """Load policies from CSV file OR from database table"""
     global POLICIES_DATA
     if POLICIES_DATA is not None:
         return POLICIES_DATA
     
-    policies_path = Path(__file__).parent.parent / "data" / "policies.csv"
     POLICIES_DATA = []
     
-    with open(policies_path, 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            POLICIES_DATA.append(row)
+    # Try loading from database first
+    try:
+        conn = sqlite3.connect(str(SAMPLE_DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM policies")
+        rows = cur.fetchall()
+        for row in rows:
+            POLICIES_DATA.append(dict(row))
+        conn.close()
+        
+        if POLICIES_DATA:
+            print(f"✅ Loaded {len(POLICIES_DATA)} policies from database")
+            return POLICIES_DATA
+    except Exception as e:
+        print(f"⚠️  Could not load from database: {e}")
+    
+    # Fallback to CSV
+    try:
+        policies_path = Path(__file__).parent.parent / "data" / "policies.csv"
+        with open(policies_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                POLICIES_DATA.append(row)
+        print(f"✅ Loaded {len(POLICIES_DATA)} policies from CSV")
+    except Exception as e:
+        print(f"❌ Could not load policies: {e}")
     
     return POLICIES_DATA
 
@@ -37,7 +59,8 @@ def get_order_db_connection():
 
 def fetch_user_orders(user_id: str, limit: int = 10) -> List[Dict]:
     """
-    Fetch user's order history from sample_data.db
+    Fetch user's order history from orders_updated table.
+    Joins with users table for customer info and shipping address.
     
     Returns list of orders with all details
     """
@@ -45,41 +68,51 @@ def fetch_user_orders(user_id: str, limit: int = 10) -> List[Dict]:
         conn = get_order_db_connection()
         cur = conn.cursor()
         
+        # Get user info for customer name and shipping
+        cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        user = cur.fetchone()
+        
+        # Fetch orders from orders_updated table
         cur.execute("""
             SELECT 
-                order_id, user_id, product_id, product_name, customer_name,
-                email, quantity, order_date, order_status, delivery_date,
-                total_amount, discount_applied, payment_status,
-                shipping_street, shipping_city, shipping_state,
-                shipping_pincode, shipping_country, created_at
-            FROM orders
-            WHERE user_id = ?
-            ORDER BY created_at DESC
+                o.order_id, o.user_id, o.product_id, o.quantity,
+                o.order_date, o.delivery_date, o.total_amount,
+                o.discount_applied, o.payment_status, o.payment_type,
+                o.created_at,
+                p."Product Name" as product_name
+            FROM orders_updated o
+            LEFT JOIN updated_essilor_products p ON o.product_id = p."Product ID"
+            WHERE o.user_id = ?
+            ORDER BY o.created_at DESC
             LIMIT ?
         """, (user_id, limit))
         
         orders = []
         for row in cur.fetchall():
+            # Determine order status based on delivery date
+            order_status = "Delivered" if row.get('delivery_date') else "Processing"
+            
             orders.append({
                 'order_id': row['order_id'],
                 'user_id': row['user_id'],
                 'product_id': row['product_id'],
-                'product_name': row['product_name'],
-                'customer_name': row['customer_name'],
-                'email': row['email'],
+                'product_name': row.get('product_name', 'Unknown Product'),
+                'customer_name': user['full_name'] if user else None,
+                'email': user['email'] if user else None,
                 'quantity': row['quantity'],
                 'order_date': row['order_date'],
-                'order_status': row['order_status'],
-                'delivery_date': row['delivery_date'],
+                'order_status': order_status,
+                'delivery_date': row.get('delivery_date'),
                 'total_amount': row['total_amount'],
-                'discount_applied': row['discount_applied'],
-                'payment_status': row['payment_status'],
+                'discount_applied': row.get('discount_applied', 0),
+                'payment_status': row.get('payment_status', 'Completed'),
+                'payment_type': row.get('payment_type'),
                 'shipping_address': {
-                    'street': row['shipping_street'],
-                    'city': row['shipping_city'],
-                    'state': row['shipping_state'],
-                    'pincode': row['shipping_pincode'],
-                    'country': row['shipping_country']
+                    'street': user['shipping_street'] if user else None,
+                    'city': user['shipping_city'] if user else None,
+                    'state': user['shipping_state'] if user else None,
+                    'pincode': user['shipping_pincode'] if user else None,
+                    'country': user.get('shipping_country', 'India') if user else 'India'
                 },
                 'created_at': row['created_at']
             })
@@ -89,6 +122,8 @@ def fetch_user_orders(user_id: str, limit: int = 10) -> List[Dict]:
     
     except Exception as e:
         print(f"❌ Error fetching orders: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 

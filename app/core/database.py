@@ -22,23 +22,69 @@ def init_db():
     Structure (similar to Firestore):
     - conversations: Session metadata (like Firestore documents)
     - messages: Individual messages within sessions (like subcollections)
+    
+    Note: 
+    - orders, orders_updated, users, updated_essilor_products, policies tables 
+      are expected to exist already
+    - This only creates conversation-related tables
     """
     with get_db_connection() as conn:
         cur = conn.cursor()
         
-        # Conversations table (sessions)
+        # Check if conversations table exists and has PRIMARY KEY
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                conversation_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                title TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            )
+            SELECT sql FROM sqlite_master 
+            WHERE type='table' AND name='conversations'
         """)
+        result = cur.fetchone()
         
-        # Messages table (messages within sessions)
+        if result and 'PRIMARY KEY' not in result[0]:
+            # Table exists but without PRIMARY KEY - need to recreate
+            print("⚠️  Recreating conversations table with PRIMARY KEY constraint...")
+            
+            # Backup existing data
+            cur.execute("SELECT * FROM conversations")
+            existing_conversations = cur.fetchall()
+            
+            # Drop old table
+            cur.execute("DROP TABLE IF EXISTS conversations")
+            
+            # Create new table with PRIMARY KEY
+            cur.execute("""
+                CREATE TABLE conversations (
+                    conversation_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                )
+            """)
+            
+            # Restore data
+            if existing_conversations:
+                for row in existing_conversations:
+                    cur.execute("""
+                        INSERT INTO conversations 
+                        (conversation_id, user_id, title, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (row[0], row[1], row[2], row[3], row[4]))
+                print(f"✅ Migrated {len(existing_conversations)} conversations")
+        
+        elif not result:
+            # Table doesn't exist - create it
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    conversation_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                )
+            """)
+        
+        # Messages table (should be fine)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 message_id TEXT PRIMARY KEY,

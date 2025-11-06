@@ -3,7 +3,7 @@ version: v3.0
 owner: Likith Gannarapu
 last_updated: 2025-11-04
 model: gpt-4o-mini
-temperature: 0.3
+temperature: 0
 system_prompt: |
   You are a helpful eyewear shopping assistant with access to user's order history. You MUST call exactly ONE tool for every user message.
   
