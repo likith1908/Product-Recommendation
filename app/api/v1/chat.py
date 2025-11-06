@@ -273,7 +273,7 @@ async def chat(
         order_context += f"- Total orders: {len(user_orders)}\n"
         if prefs.get('favorite_brand'):
             order_context += f"- Favorite brand: {prefs['favorite_brand']}\n"
-        order_context += f"- Average order value: ₹{prefs.get('average_price', 0)}\n"
+        order_context += f"- Average order value: {prefs.get('average_price', 0)}\n"
         
         # Preferences
         if prefs['has_sunglasses']:
@@ -317,9 +317,9 @@ async def chat(
                 order_context += f"   Status: {order['order_status']} (not yet delivered)\n"
                 order_context += f"   ✅ Can claim damaged/defective on arrival\n"
             
-            order_context += f"   Amount: ₹{order['total_amount']}"
+            order_context += f"   Amount: {order['total_amount']}"
             if order.get('discount_applied') and order['discount_applied'] > 0:
-                order_context += f" (Saved: ₹{order['discount_applied']})"
+                order_context += f" (Saved: {order['discount_applied']})"
             order_context += "\n"
             
             order_context += f"   Payment: {order['payment_status']}\n"

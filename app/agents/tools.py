@@ -70,7 +70,8 @@ def fetch_user_orders(user_id: str, limit: int = 10) -> List[Dict]:
         
         # Get user info for customer name and shipping
         cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        user = cur.fetchone()
+        user_row = cur.fetchone()
+        user = dict(user_row) if user_row else None
         
         # Fetch orders from orders_updated table
         cur.execute("""
@@ -89,24 +90,27 @@ def fetch_user_orders(user_id: str, limit: int = 10) -> List[Dict]:
         
         orders = []
         for row in cur.fetchall():
+            # Convert sqlite3.Row to dict for safe access
+            row_dict = dict(row)
+            
             # Determine order status based on delivery date
-            order_status = "Delivered" if row.get('delivery_date') else "Processing"
+            order_status = "Delivered" if row_dict.get('delivery_date') else "Processing"
             
             orders.append({
-                'order_id': row['order_id'],
-                'user_id': row['user_id'],
-                'product_id': row['product_id'],
-                'product_name': row.get('product_name', 'Unknown Product'),
+                'order_id': row_dict['order_id'],
+                'user_id': row_dict['user_id'],
+                'product_id': row_dict['product_id'],
+                'product_name': row_dict.get('product_name', 'Unknown Product'),
                 'customer_name': user['full_name'] if user else None,
                 'email': user['email'] if user else None,
-                'quantity': row['quantity'],
-                'order_date': row['order_date'],
+                'quantity': row_dict['quantity'],
+                'order_date': row_dict['order_date'],
                 'order_status': order_status,
-                'delivery_date': row.get('delivery_date'),
-                'total_amount': row['total_amount'],
-                'discount_applied': row.get('discount_applied', 0),
-                'payment_status': row.get('payment_status', 'Completed'),
-                'payment_type': row.get('payment_type'),
+                'delivery_date': row_dict.get('delivery_date'),
+                'total_amount': row_dict['total_amount'],
+                'discount_applied': row_dict.get('discount_applied', 0),
+                'payment_status': row_dict.get('payment_status', 'Completed'),
+                'payment_type': row_dict.get('payment_type'),
                 'shipping_address': {
                     'street': user['shipping_street'] if user else None,
                     'city': user['shipping_city'] if user else None,
@@ -114,7 +118,7 @@ def fetch_user_orders(user_id: str, limit: int = 10) -> List[Dict]:
                     'pincode': user['shipping_pincode'] if user else None,
                     'country': user.get('shipping_country', 'India') if user else 'India'
                 },
-                'created_at': row['created_at']
+                'created_at': row_dict['created_at']
             })
         
         conn.close()

@@ -89,10 +89,10 @@ system_prompt: |
   • Other
   
   **4. What's your budget range?**
-  • Under ₹1,000
-  • ₹1,000 - ₹2,000
-  • ₹2,000 - ₹3,000
-  • Above ₹3,000
+  • Under 1,000
+  • 1,000 - 2,000
+  • 2,000 - 3,000
+  • Above 3,000
   
   Just share a few preferences and I'll find perfect matches for you!"
   
@@ -168,7 +168,7 @@ system_prompt: |
   • Black, Brown/Tortoise, Blue, Clear, Other
   
   **4. What's your budget range?**
-  • Under ₹1,000 / ₹1,000-₹2,000 / ₹2,000-₹3,000 / Above ₹3,000
+  • Under 1,000 / 1,000-2,000 / 2,000-3,000 / Above 3,000
   
   Just share a few preferences and I'll find perfect matches for you!"
   
@@ -192,15 +192,15 @@ system_prompt: |
   )
   
   Response:
-  "Perfect! Here are black round computer glasses with blue light protection under ₹2,000:
+  "Perfect! Here are black round computer glasses with blue light protection under 2,000:
   
-  1. **John Jacobs Round Blue Block Glasses** - ₹1,499
+  1. **John Jacobs Round Blue Block Glasses** - 1,499
      • Black full-rim frame
      • Blue light filter technology
      • Lightweight and comfortable
      • Match Score: 95%
   
-  2. **Vincent Chase Digital Screen Glasses** - ₹1,799
+  2. **Vincent Chase Digital Screen Glasses** - 1,799
      • Round black frame
      • Anti-glare + blue cut lenses
      • Perfect for 8+ hour screen time

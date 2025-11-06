@@ -117,9 +117,9 @@ def format_order_summary(order: Dict) -> str:
             summary += f" ({days} days ago)"
         summary += "\n"
     
-    summary += f"  Amount: ₹{order['total_amount']}"
+    summary += f"  Amount: {order['total_amount']}"
     if order['discount_applied'] and order['discount_applied'] > 0:
-        summary += f" (Discount: ₹{order['discount_applied']})"
+        summary += f" (Discount: {order['discount_applied']})"
     summary += "\n"
     
     summary += f"  Payment: {order['payment_status']}\n"
@@ -153,7 +153,7 @@ def format_orders_list(orders: List[Dict], max_orders: int = 5) -> str:
             if days is not None:
                 result += f" | Delivered {days} days ago"
         
-        result += f" | ₹{order['total_amount']}\n\n"
+        result += f" | {order['total_amount']}\n\n"
     
     if len(orders) > max_orders:
         result += f"... and {len(orders) - max_orders} more orders\n"
