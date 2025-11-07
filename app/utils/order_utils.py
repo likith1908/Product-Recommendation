@@ -3,8 +3,57 @@ Utilities for working with order data
 """
 
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
+import sqlite3
+from pathlib import Path
+
+from app.core.config import settings
+
+def get_products_by_ids(db_path: str, product_ids: Optional[List[str]] = None) -> Dict[str, Dict]:
+    """
+    Fetch product details for given product IDs from the SQLite database.
+
+    Args:
+        db_path: Optional path to SQLite database. If None, a sensible default
+                 from project settings will be used.
+        product_ids: List of product IDs
+
+    Returns:
+        Dict mapping product_id -> product details
+    """
+    # Determine default DB path when not provided
+    if db_path is None:
+        # prefer explicit DATABASE_PATH from env/settings
+        if settings.DATABASE_PATH:
+            db_path = settings.DATABASE_PATH
+        else:
+            sample_db = Path(__file__).parent.parent.parent / "sample_data.db"
+            if sample_db.exists():
+                db_path = str(sample_db)
+            else:
+                # Print Error message
+                print("Warning: DATABASE_PATH not set")
+
+    if not product_ids:
+        return {}
+
+    placeholders = ','.join('?' for _ in product_ids)
+
+    query = f"""
+        SELECT product_id, product_name, brand_name, product_type, price, frame_shape, frame_colour, lens_color, face_shape, frame_material, activity, description
+        FROM updated_essilor_products
+        WHERE product_id IN ({placeholders})
+    """
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(query, product_ids)
+    rows = cursor.fetchall()
+    conn.close()
+
+    return {row['product_id']: dict(row) for row in rows}
 
 def calculate_days_since_delivery(delivery_date: str) -> Optional[int]:
     """
@@ -161,7 +210,7 @@ def format_orders_list(orders: List[Dict], max_orders: int = 5) -> str:
     return result
 
 
-def extract_product_preferences(orders: List[Dict]) -> Dict[str, any]:
+def extract_product_preferences(orders: List[Dict], db_path: str) -> Dict[str, Any]:
     """
     Extract user preferences from order history.
     
@@ -179,31 +228,42 @@ def extract_product_preferences(orders: List[Dict]) -> Dict[str, any]:
     
     # Count product types
     product_names = [order['product_name'].lower() for order in orders]
-    
-    # Simple categorization
-    has_sunglasses = any('sunglass' in name for name in product_names)
-    has_reading = any('reading' in name or 'reader' in name for name in product_names)
-    has_computer = any('computer' in name or 'blue' in name for name in product_names)
-    
+    product_ids = [order['product_id'] for order in orders]
+    product_details = get_products_by_ids(db_path, product_ids)
+
+    # Combine order + product data
+    enriched_orders = []
+    for order in orders:
+        pid = order['product_id']
+        if pid in product_details:
+            enriched = {**order, **product_details[pid]}
+        else:
+            enriched = order
+        enriched_orders.append(enriched)
+
+    # --- Preference extraction ---
+    product_names = [o.get('product_name', '').lower() for o in enriched_orders]
+
+    has_sunglasses = any('sunglass' in name for name in product_details.values())
+    has_reading = any('reading' in name or 'reader' in name for name in product_details.values())
+    has_computer = any('computer' in name or 'blue' in name for name in product_details.values())
+
     # Brand preferences
     brands = {}
-    for order in orders:
-        name = order['product_name']
-        # Extract brand (usually first words)
-        words = name.split()
-        if len(words) >= 2:
-            potential_brand = ' '.join(words[:2])
-            brands[potential_brand] = brands.get(potential_brand, 0) + 1
-    
+    for o in enriched_orders:
+        brand = o.get('brand_name', '').strip()
+        if brand:
+            brands[brand] = brands.get(brand, 0) + 1
+
     favorite_brand = max(brands.items(), key=lambda x: x[1])[0] if brands else None
-    
+
     # Price range
-    prices = [float(order['total_amount']) for order in orders if order['total_amount']]
+    prices = [float(o.get('price', o.get('total_amount', 0))) for o in enriched_orders if o.get('price') or o.get('total_amount')]
     avg_price = sum(prices) / len(prices) if prices else 0
-    
+
     return {
         "has_orders": True,
-        "total_orders": len(orders),
+        "total_orders": len(enriched_orders),
         "has_sunglasses": has_sunglasses,
         "has_reading_glasses": has_reading,
         "has_computer_glasses": has_computer,
@@ -214,7 +274,6 @@ def extract_product_preferences(orders: List[Dict]) -> Dict[str, any]:
             "max": max(prices) if prices else 0
         }
     }
-
 
 def get_order_by_id(orders: List[Dict], order_id: str) -> Optional[Dict]:
     """

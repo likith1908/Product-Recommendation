@@ -189,6 +189,10 @@ class ProductEmbeddingService:
     def create_text_embedding(self, text: str) -> np.ndarray:
         """Create Sentence Transformer embedding for text (384D)"""
         embedding = self.text_model.encode(text, convert_to_numpy=True)
+        # Normalize
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
         return embedding.astype(np.float32)
     
     def create_image_embedding(self, image_url: str) -> Optional[np.ndarray]:

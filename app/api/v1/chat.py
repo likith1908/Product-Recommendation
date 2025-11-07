@@ -18,12 +18,12 @@ from app.services.gcs_service import get_gcs_service
 from app.agents.tools import fetch_user_orders
 from app.agents.tools import fetch_user_orders
 from app.utils.order_utils import (
-    format_orders_list, 
     extract_product_preferences,
     check_return_eligibility,
     check_replacement_eligibility
 )
 import json
+from app.core.config import Settings
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -262,7 +262,7 @@ async def chat(
     order_context = ""
     if user_orders:
         # Extract preferences
-        prefs = extract_product_preferences(user_orders)
+        prefs = extract_product_preferences(user_orders, db_path=Settings().DATABASE_PATH)
         
         order_context = "\n\n" + "="*50 + "\n"
         order_context += "USER'S ORDER HISTORY & PREFERENCES\n"
@@ -350,8 +350,8 @@ async def chat(
    - Be clear about eligibility status
    
 4. POLICY QUESTIONS:
-   - For returns: Check if within 10-day window
-   - For replacements: Check if within 15-day window
+   - For returns: Check if return is applicable & order is delivered within 10-day window
+   - For replacements: Check if replacement is applicable & order is delivered within 15-day window
    - Reference specific order dates when advising
    
 5. PRODUCT RECOMMENDATIONS:
@@ -360,7 +360,7 @@ async def chat(
    - Stay within their typical price range
    - Ask if they want similar or different styles
 
-REMEMBER: Make responses personal and helpful!
+REMEMBER: Make responses personal and helpful
 """
         order_context += "="*50 + "\n\n"
     else:
